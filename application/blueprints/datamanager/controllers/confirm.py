@@ -297,11 +297,17 @@ def handle_add_data_confirm(
         logger.error(f"Failed to trigger async workflow: {result['message']}")
         raise ControllerError(f"Failed to trigger async workflow: {result['message']}")
 
+    # On success, assign-entities returns to its summary page; add-data to the
+    # dashboard (or the caller's return_url).
+    if source_flow == "assign_entities":
+        success_return_url = url_for("assign_entities.flagged_resources_summary")
+    else:
+        success_return_url = return_url or url_for("datamanager.dashboard_get")
     logger.info(f"Successfully triggered async workflow for request_id: {request_id}")
     return render_template(
         "datamanager/add-data-success.html",
         message=result["message"],
         github_branch=github_branch,
         source_flow=source_flow,
-        return_url=return_url or _default_return_url(source_flow),
+        return_url=success_return_url,
     )
