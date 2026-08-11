@@ -6,3 +6,16 @@
     color: darken(govuk-colour('red'), 10);
   }
 }
+
+.app-link-button {
+  padding: 0;
+  border: 0;
+  background: transparent;
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+
+.app-artifact-form {
+  margin: 0;
+}

@@ -2,6 +2,9 @@ import json
 import logging
 import tempfile
 import uuid
+import zipfile
+from datetime import datetime
+from fnmatch import fnmatch
 from io import BytesIO, StringIO
 from pathlib import Path
 
@@ -15,6 +18,13 @@ from .request_meta import record_branch_baseline, record_source_flow
 from .transform import handle_check_transform
 from ..services.async_api import AsyncAPIError, fetch_request, submit_request
 from ..services.dataset import get_collection_id, get_dataset_id, get_dataset_name
+from ..services.github import (
+    GitHubAppError,
+    GitHubArtifactError,
+    MAX_ARTIFACT_ARCHIVE_BYTES,
+    download_batch_assign_artifact,
+    get_latest_batch_assign_artifacts,
+)
 
 REQUIRED_COLUMNS = [
     "dataset",
@@ -380,7 +390,103 @@ def _submit_assign_entities_request(
     return preview_id
 
 
-def handle_flagged_resources_start():
+def _artifact_page_context():
+    artifacts = []
+    artifact_lookup_failed = False
+    try:
+        artifacts = get_latest_batch_assign_artifacts()
+    except GitHubAppError:
+        artifact_lookup_failed = True
+        logger.exception("Unable to load batch assign artifacts")
+
+    github_org = current_app.config.get("GITHUB_ORG", "digital-land")
+    display_artifacts = []
+    for artifact in artifacts:
+        workflow_run = artifact.get("workflow_run") or {}
+        run_id = workflow_run.get("id")
+        created_at = artifact.get("created_at") or ""
+        try:
+            created_at_display = datetime.fromisoformat(
+                created_at.replace("Z", "+00:00")
+            ).strftime("%-d %B %Y at %H:%M UTC")
+        except ValueError:
+            created_at_display = created_at
+
+        size_in_bytes = artifact.get("size_in_bytes")
+        size_display = None
+        if isinstance(size_in_bytes, (int, float)) and size_in_bytes >= 0:
+            size = float(size_in_bytes)
+            units = ("bytes", "KB", "MB", "GB")
+            for unit in units:
+                if size < 1024 or unit == units[-1]:
+                    size_display = (
+                        f"{int(size)} {unit}"
+                        if unit == "bytes"
+                        else f"{size:.1f} {unit}"
+                    )
+                    break
+                size /= 1024
+
+        display_artifacts.append(
+            {
+                **artifact,
+                "created_at_display": created_at_display,
+                "size_display": size_display,
+                "is_too_large": (
+                    isinstance(size_in_bytes, (int, float))
+                    and size_in_bytes >= MAX_ARTIFACT_ARCHIVE_BYTES
+                ),
+                "workflow_run_url": (
+                    f"https://github.com/{github_org}/config/actions/runs/{run_id}"
+                    if run_id
+                    else None
+                ),
+            }
+        )
+
+    show_artifact_size = any(
+        artifact["size_display"] is not None for artifact in display_artifacts
+    )
+    return display_artifacts, artifact_lookup_failed, show_artifact_size
+
+
+def _read_artifact_csv(archive_bytes):
+    """Read the batch-assign summary CSV from an artifact ZIP."""
+    try:
+        archive = zipfile.ZipFile(BytesIO(archive_bytes))
+    except zipfile.BadZipFile as e:
+        raise ValueError("The GitHub artifact is not a valid ZIP file.") from e
+
+    try:
+        matching_files = [
+            member
+            for member in archive.infolist()
+            if not member.is_dir()
+            and fnmatch(
+                member.filename.rsplit("/", 1)[-1].lower(),
+                "batch_assign_summary*.csv",
+            )
+        ]
+        if not matching_files:
+            raise ValueError(
+                "The artifact does not contain a batch_assign_summary CSV file."
+            )
+        if len(matching_files) > 1:
+            raise ValueError(
+                "The artifact contains more than one batch_assign_summary CSV file."
+            )
+
+        member = matching_files[0]
+        if member.file_size >= MAX_ARTIFACT_ARCHIVE_BYTES:
+            raise ValueError("The CSV file in the artifact must be smaller than 20 MB.")
+        return _read_csv_upload(BytesIO(archive.read(member)))
+    except (zipfile.BadZipFile, RuntimeError) as e:
+        raise ValueError("The GitHub artifact ZIP could not be read.") from e
+    finally:
+        archive.close()
+
+
+def handle_flagged_resources_start(artifact_error=None):
     errors = {}
     form = {
         "dataset": request.form.get("dataset", "").strip(),
@@ -414,11 +520,28 @@ def handle_flagged_resources_start():
         else:
             errors["form"] = "Enter a dataset and resource"
 
+    artifacts, artifact_lookup_failed, show_artifact_size = _artifact_page_context()
+
     return render_template(
         "datamanager/flagged-resources-start.html",
         errors=errors,
         form=form,
+        artifacts=artifacts,
+        artifact_lookup_failed=artifact_lookup_failed,
+        show_artifact_size=show_artifact_size,
+        artifact_error=artifact_error,
     )
+
+
+def handle_flagged_artifact_assign(artifact_id):
+    try:
+        archive_bytes = download_batch_assign_artifact(artifact_id)
+        df = _read_artifact_csv(archive_bytes)
+    except (GitHubArtifactError, ValueError) as e:
+        return handle_flagged_resources_start(artifact_error=str(e))
+
+    _store_rows(df)
+    return redirect(url_for("assign_entities.flagged_resources_summary"))
 
 
 def handle_flagged_resources_import():

@@ -1,5 +1,6 @@
 import json
 import re
+import zipfile
 from datetime import datetime
 from io import BytesIO
 from unittest.mock import patch
@@ -10,6 +11,7 @@ from application.blueprints.base.views import ADD_DATA_LOCK, ASSIGN_ENTITIES_LOC
 from application.db.models import RequestMeta, ServiceLock
 from application.extensions import db
 from config.config import get_request_api_endpoint
+from application.blueprints.datamanager.services.github import GitHubArtifactError
 
 ASYNC_BASE = f"{get_request_api_endpoint()}/requests"
 
@@ -67,6 +69,120 @@ def test_flagged_resources_start_page_loads(client):
     assert b"Import from CSV" not in response.data
     assert b"autocomplete-container" not in response.data
     assert b"accessible-autocomplete.min.js" not in response.data
+
+
+def test_flagged_resources_start_lists_latest_github_artifacts(client):
+    artifacts = [
+        {
+            "id": 123,
+            "name": "batch-assign-odp-output",
+            "created_at": "2026-08-10T09:30:00Z",
+            "size_in_bytes": 12 * 1024 * 1024,
+            "workflow_run": {"id": 456},
+        }
+    ]
+    with patch(
+        "application.blueprints.datamanager.controllers.flagged_resources.get_latest_batch_assign_artifacts",
+        return_value=artifacts,
+    ):
+        response = client.get("/assign-entities")
+
+    assert response.status_code == 200
+    assert b"Latest batch assign outputs" in response.data
+    assert b"batch-assign-odp-output" in response.data
+    assert b"10 August 2026 at 09:30 UTC" in response.data
+    assert b"Size" in response.data
+    assert b"12.0 MB" in response.data
+    assert b"https://github.com/digital-land/config/actions/runs/456" in response.data
+    assert b'target="_blank"' in response.data
+    assert b"/assign-entities/artifacts/123/assign" in response.data
+    assert b'class="govuk-link app-link-button"' in response.data
+    assert b'data-artifact-too-large="false"' in response.data
+    assert b"govuk-button--secondary" not in response.data
+
+
+def test_oversized_github_artifact_is_marked_for_client_side_error(client):
+    artifacts = [
+        {
+            "id": 123,
+            "name": "batch-assign-odp-output",
+            "created_at": "2026-08-10T09:30:00Z",
+            "size_in_bytes": 20 * 1024 * 1024,
+            "workflow_run": {"id": 456},
+        }
+    ]
+    with patch(
+        "application.blueprints.datamanager.controllers.flagged_resources.get_latest_batch_assign_artifacts",
+        return_value=artifacts,
+    ):
+        response = client.get("/assign-entities")
+
+    assert response.status_code == 200
+    assert b'data-artifact-too-large="true"' in response.data
+    assert b'id="artifact-size-error"' in response.data
+    assert b"Download it from GitHub and upload the CSV instead." in response.data
+
+
+def test_assign_entities_from_github_artifact_processes_compatible_csv(client):
+    archive = BytesIO()
+    with zipfile.ZipFile(archive, "w") as artifact_zip:
+        artifact_zip.writestr("unrelated.csv", "name,value\nexample,1\n")
+        artifact_zip.writestr("batch_assign_summary-output.csv", CSV_INPUT)
+
+    with patch(
+        "application.blueprints.datamanager.controllers.flagged_resources.download_batch_assign_artifact",
+        return_value=archive.getvalue(),
+    ):
+        response = client.post("/assign-entities/artifacts/123/assign")
+
+    assert response.status_code == 302
+    assert response.headers["Location"].endswith("/assign-entities/resources")
+
+    summary = client.get(response.headers["Location"])
+    assert summary.status_code == 200
+    assert b"resource-a" in summary.data
+    assert b"resource-b" in summary.data
+
+
+def test_assign_entities_from_github_artifact_requires_batch_assign_summary_csv(client):
+    archive = BytesIO()
+    with zipfile.ZipFile(archive, "w") as artifact_zip:
+        artifact_zip.writestr("other-output.csv", CSV_INPUT)
+
+    with patch(
+        "application.blueprints.datamanager.controllers.flagged_resources.download_batch_assign_artifact",
+        return_value=archive.getvalue(),
+    ):
+        response = client.post("/assign-entities/artifacts/123/assign")
+
+    assert response.status_code == 200
+    assert b"does not contain a batch_assign_summary CSV file" in response.data
+
+
+def test_assign_entities_from_github_artifact_shows_download_error(client):
+    artifacts = [
+        {
+            "id": 123,
+            "name": "batch-assign-odp-output",
+            "created_at": "2026-08-10T09:30:00Z",
+            "workflow_run": {"id": 456},
+        }
+    ]
+    with patch(
+        "application.blueprints.datamanager.controllers.flagged_resources.download_batch_assign_artifact",
+        side_effect=GitHubArtifactError(
+            "This artifact is 20 MB or larger. Download it from GitHub and upload "
+            "the CSV instead."
+        ),
+    ), patch(
+        "application.blueprints.datamanager.controllers.flagged_resources.get_latest_batch_assign_artifacts",
+        return_value=artifacts,
+    ):
+        response = client.post("/assign-entities/artifacts/123/assign")
+
+    assert response.status_code == 200
+    assert b"This artifact is 20 MB or larger." in response.data
+    assert b"Download it from GitHub and upload the CSV instead." in response.data
 
 
 def test_flagged_resources_import_page_loads(client):

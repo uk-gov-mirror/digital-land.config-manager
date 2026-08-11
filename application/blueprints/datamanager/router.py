@@ -29,6 +29,7 @@ from .controllers.flagged_resources import (
     _submit_assign_entities_request,
     handle_flagged_resource_detail,
     handle_flagged_resource_submit,
+    handle_flagged_artifact_assign,
     handle_flagged_resources_import,
     handle_flagged_resources_start,
     handle_flagged_resources_summary,
@@ -342,6 +343,10 @@ def flagged_resources_import():
     return handle_flagged_resources_import()
 
 
+def flagged_artifact_assign(artifact_id):
+    return handle_flagged_artifact_assign(artifact_id)
+
+
 def flagged_resources_summary():
     return handle_flagged_resources_summary()
 
@@ -476,6 +481,11 @@ assign_entities_bp.add_url_rule(
     "/import",
     view_func=flagged_resources_import,
     methods=["GET", "POST"],
+)
+assign_entities_bp.add_url_rule(
+    "/artifacts/<int:artifact_id>/assign",
+    view_func=flagged_artifact_assign,
+    methods=["POST"],
 )
 assign_entities_bp.add_url_rule(
     "/resources",
