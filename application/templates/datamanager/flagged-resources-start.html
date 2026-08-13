@@ -64,7 +64,10 @@
             <tr class="govuk-table__row">
               <td class="govuk-table__cell">
                 <form method="post" action="{{ url_for('assign_entities.flagged_artifact_assign', artifact_id=artifact.id) }}" class="app-artifact-form" data-artifact-too-large="{{ 'true' if artifact.is_too_large else 'false' }}">
-                  <button type="submit" class="govuk-link app-link-button">{{ artifact.name }}</button>
+                  <button type="submit" class="govuk-link app-link-button"{% if artifact.is_too_large %} aria-describedby="artifact-too-large-{{ artifact.id }}"{% endif %}>{{ artifact.name }}</button>
+                  {% if artifact.is_too_large %}
+                    <span id="artifact-too-large-{{ artifact.id }}" class="govuk-hint govuk-!-margin-bottom-0">Too large to import. Download and upload the CSV instead.</span>
+                  {% endif %}
                 </form>
               </td>
               <td class="govuk-table__cell">

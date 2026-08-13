@@ -25,11 +25,17 @@ def set_assign_entity_resource_status(
     return record
 
 
-def get_assign_entity_resource_statuses(resources: list[str]) -> dict[str, AssignEntityResource]:
+def get_assign_entity_resource_statuses(
+    resources: list[str],
+) -> dict[str, AssignEntityResource]:
     """Return persisted status records keyed by resource."""
     if not resources:
         return {}
-    records = AssignEntityResource.query.filter(
-        AssignEntityResource.resource.in_(resources)
-    ).all()
+    records = []
+    for start in range(0, len(resources), 500):
+        records.extend(
+            AssignEntityResource.query.filter(
+                AssignEntityResource.resource.in_(resources[start : start + 500])
+            ).all()
+        )
     return {record.resource: record for record in records}

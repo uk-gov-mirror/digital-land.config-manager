@@ -153,7 +153,9 @@ def _latest_artifact_named(access_token: str, name: str) -> dict | None:
         response.raise_for_status()
     except requests.exceptions.RequestException as e:
         logger.error(f"Failed to list GitHub artifacts named '{name}': {e}")
-        raise GitHubAppError(f"Failed to list GitHub artifacts named '{name}': {e}")
+        raise GitHubAppError(
+            f"Failed to list GitHub artifacts named '{name}': {e}"
+        ) from e
 
     artifacts = response.json().get("artifacts") or []
     if not artifacts:
@@ -171,16 +173,27 @@ def get_latest_batch_assign_artifacts() -> list[dict]:
     names exist.
     """
     access_token = _get_access_token()
-    artifacts = [
-        artifact
-        for name in _BATCH_ASSIGN_ARTIFACT_NAMES
-        if (artifact := _latest_artifact_named(access_token, name)) is not None
-    ]
+    artifacts = []
+    for name in _BATCH_ASSIGN_ARTIFACT_NAMES:
+        try:
+            artifact = _latest_artifact_named(access_token, name)
+        except GitHubAppError:
+            logger.exception("Unable to load batch assign artifact %s", name)
+            continue
+        if artifact is not None:
+            artifacts.append(artifact)
 
     if not artifacts:
-        fallback = _latest_artifact_named(
-            access_token, _BATCH_ASSIGN_FALLBACK_ARTIFACT_NAME
-        )
+        try:
+            fallback = _latest_artifact_named(
+                access_token, _BATCH_ASSIGN_FALLBACK_ARTIFACT_NAME
+            )
+        except GitHubAppError:
+            logger.exception(
+                "Unable to load batch assign artifact %s",
+                _BATCH_ASSIGN_FALLBACK_ARTIFACT_NAME,
+            )
+            fallback = None
         if fallback is not None:
             artifacts.append(fallback)
 
@@ -231,22 +244,22 @@ def download_batch_assign_artifact(artifact_id: int) -> bytes:
 
     archive_url = f"{artifact_url}/zip"
     try:
-        download_response = requests.get(
+        with requests.get(
             archive_url,
             headers=_github_headers(access_token),
             allow_redirects=True,
             stream=True,
             timeout=(10, 60),
-        )
-        download_response.raise_for_status()
-        archive = BytesIO()
-        for chunk in download_response.iter_content(chunk_size=64 * 1024):
-            archive.write(chunk)
-            if archive.tell() >= MAX_ARTIFACT_ARCHIVE_BYTES:
-                raise GitHubArtifactError(
-                    "This artifact is 20 MB or larger. Download it from GitHub and "
-                    "upload the CSV instead."
-                )
+        ) as download_response:
+            download_response.raise_for_status()
+            archive = BytesIO()
+            for chunk in download_response.iter_content(chunk_size=64 * 1024):
+                archive.write(chunk)
+                if archive.tell() >= MAX_ARTIFACT_ARCHIVE_BYTES:
+                    raise GitHubArtifactError(
+                        "This artifact is 20 MB or larger. Download it from GitHub and "
+                        "upload the CSV instead."
+                    )
     except GitHubArtifactError:
         raise
     except requests.exceptions.RequestException as e:

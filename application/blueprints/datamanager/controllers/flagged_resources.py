@@ -3,6 +3,7 @@ import logging
 import tempfile
 import uuid
 import zipfile
+import zlib
 from datetime import datetime
 from fnmatch import fnmatch
 from io import BytesIO, StringIO
@@ -261,9 +262,7 @@ def _resource_error_sort_key(resource):
         ),
         default=99,
     )
-    row_order = {"entity_growth": 0, "yellow": 1, "red": 2}.get(
-        resource["row_type"], 3
-    )
+    row_order = {"entity_growth": 0, "yellow": 1, "red": 2}.get(resource["row_type"], 3)
     return (
         row_order,
         error_order,
@@ -487,10 +486,23 @@ def _read_artifact_csv(archive_bytes):
         if member.file_size >= MAX_ARTIFACT_ARCHIVE_BYTES:
             raise ValueError("The CSV file in the artifact must be smaller than 20 MB.")
         return _read_csv_upload(BytesIO(archive.read(member)))
-    except (zipfile.BadZipFile, RuntimeError) as e:
+    except (zipfile.BadZipFile, EOFError, RuntimeError, zlib.error) as e:
         raise ValueError("The GitHub artifact ZIP could not be read.") from e
     finally:
         archive.close()
+
+
+def _render_flagged_resources_start(errors=None, form=None, artifact_error=None):
+    artifacts, artifact_lookup_failed, show_artifact_size = _artifact_page_context()
+    return render_template(
+        "datamanager/flagged-resources-start.html",
+        errors=errors or {},
+        form=form or {"dataset": "", "resource": ""},
+        artifacts=artifacts,
+        artifact_lookup_failed=artifact_lookup_failed,
+        show_artifact_size=show_artifact_size,
+        artifact_error=artifact_error,
+    )
 
 
 def handle_flagged_resources_start(artifact_error=None):
@@ -527,17 +539,7 @@ def handle_flagged_resources_start(artifact_error=None):
         else:
             errors["form"] = "Enter a dataset and resource"
 
-    artifacts, artifact_lookup_failed, show_artifact_size = _artifact_page_context()
-
-    return render_template(
-        "datamanager/flagged-resources-start.html",
-        errors=errors,
-        form=form,
-        artifacts=artifacts,
-        artifact_lookup_failed=artifact_lookup_failed,
-        show_artifact_size=show_artifact_size,
-        artifact_error=artifact_error,
-    )
+    return _render_flagged_resources_start(errors, form, artifact_error)
 
 
 def handle_flagged_artifact_assign(artifact_id):
@@ -545,7 +547,7 @@ def handle_flagged_artifact_assign(artifact_id):
         archive_bytes = download_batch_assign_artifact(artifact_id)
         df = _read_artifact_csv(archive_bytes)
     except (GitHubArtifactError, ValueError) as e:
-        return handle_flagged_resources_start(artifact_error=str(e))
+        return _render_flagged_resources_start(artifact_error=str(e))
 
     _store_rows(df)
     return redirect(url_for("assign_entities.flagged_resources_summary"))
@@ -623,7 +625,10 @@ def handle_flagged_resource_submit():
         raise ControllerError(f"Assign entities submission failed: {e.detail}") from e
 
     actor_username = (session.get("user") or {}).get("login", "unknown")
-    set_assign_entity_resource_status(resource, IN_PROGRESS, actor_username)
+    try:
+        set_assign_entity_resource_status(resource, IN_PROGRESS, actor_username)
+    except Exception:
+        logger.exception("Could not record Assign Entities status for %s", resource)
 
     return redirect(
         url_for(

@@ -28,7 +28,8 @@ itself. It passes selected references to async, then displays and commits whatev
 | Area | File | Role |
 | --- | --- | --- |
 | Routes | `application/blueprints/datamanager/router.py` | Assign Entities routes, selection POST handling, replacement async request |
-| Start/import | `application/blueprints/datamanager/controllers/flagged_resources.py` | Direct resource/dataset entry, flagged-resources CSV import, async request submission |
+| Start/import | `application/blueprints/datamanager/controllers/flagged_resources.py` | Direct resource/dataset entry, GitHub artifact and CSV import, async request submission |
+| Resource status | `application/blueprints/datamanager/services/assign_entity_resources.py` | Persists the current status and actor for each resource |
 | Results page | `application/blueprints/datamanager/controllers/transform.py` | Builds Entities and Dedup tab data from async response |
 | Shared results template | `application/templates/datamanager/components/check-transform-base.html` | Entities tab table, entity checkboxes, selection count, shared button state |
 | Dedup template | `application/templates/datamanager/assign-entities-check-results.html` | Dedup tab, duplicate redirect checkboxes, hidden changed flag |
@@ -43,7 +44,15 @@ itself. It passes selected references to async, then displays and commits whatev
 ### 1. Start Assign Entities
 
 The user starts at `/assign-entities/` by entering a dataset/resource pair, or by uploading/pasting
-a flagged-resources CSV.
+a flagged-resources CSV. The page also lists the most recent artifacts from `digital-land/config`:
+
+- `batch-assign-odp-output`
+- `batch-assign-mandated-output`
+- `batch-assign-single-source-output`
+
+If none of those exist, it lists `generated-files` instead. Selecting an artifact downloads its ZIP
+and imports its single `batch_assign_summary*.csv` file. Artifacts of 20 MB or more are not
+imported; the operator must download and upload the CSV instead.
 
 `controllers/flagged_resources.py` resolves:
 
@@ -71,6 +80,17 @@ It then submits an async request using `_submit_assign_entities_request`.
 
 At this point no explicit selection is sent, so async treats the request as "assign all new
 entities".
+
+#### Resource status
+
+The flagged-resources summary shows the current status beside each resource. Status is keyed only
+by the resource hash in the `assign_entity_resource` table and includes the actor username and
+last-updated timestamp. A resource becomes `in_progress` after its async assessment is submitted.
+It becomes `processed` after config-manager successfully dispatches the GitHub workflow. This
+means `processed` records a successful dispatch, not completion of the downstream workflow.
+
+`status` is nullable, so a resource can be unmarked as completed. A resource with no status (or no
+record) is displayed as **Not started**.
 
 ### 2. Show async result
 
@@ -126,6 +146,9 @@ do not currently run duplicate detection.
 
 Candidate rows come from `pipeline-summary.duplicate-candidates`. Initial checked state comes from
 `pipeline-summary.old-entity`, not from a score threshold in config-manager.
+
+For a stable table order, config-manager sorts candidates numerically by old entity and then by new
+entity before rendering them. Non-numeric identifiers sort after numeric identifiers by text.
 
 Non-spatial candidates have `match_type: all_fields_match`. They compare every
 field supplied by the transformed resource except `reference` and `entry-date`,

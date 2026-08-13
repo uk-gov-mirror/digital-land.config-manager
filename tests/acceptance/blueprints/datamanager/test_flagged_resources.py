@@ -496,7 +496,7 @@ def test_csv_upload_groups_resource_dataset_combinations(client):
     assert b"background-color: #fff7bf" in response.data
     assert b"background-color: #ffd8b0" in response.data
     assert b"background-color: #d4edda" not in response.data
-    assert b"aria-label=\"Error summary\"" in response.data
+    assert b'aria-label="Error summary"' in response.data
     assert b"Entity growth" in response.data
     assert b"Needs review" in response.data
     assert b"Other errors" in response.data
@@ -1511,7 +1511,9 @@ def test_resource_link_submits_assign_entities_request(client):
     }
 
 
-def test_flagged_resources_summary_shows_persisted_and_cleared_processing_status(client):
+def test_flagged_resources_summary_shows_persisted_and_cleared_processing_status(
+    client,
+):
     import_response = client.post(
         "/assign-entities/import",
         data={"csv_data": CSV_INPUT},
@@ -1530,7 +1532,7 @@ def test_flagged_resources_summary_shows_persisted_and_cleared_processing_status
     response = client.get("/assign-entities/resources")
 
     assert response.status_code == 200
-    assert b"<th scope=\"col\" class=\"govuk-table__header\">Status</th>" in response.data
+    assert b'<th scope="col" class="govuk-table__header">Status</th>' in response.data
     assert b"Processed" in response.data
     assert b"(test-user)" in response.data
 

@@ -120,6 +120,8 @@ class TestDownloadBatchAssignArtifact:
     def test_uses_metadata_size_before_streaming_download(self, app):
         metadata_response = self._metadata_response(size_in_bytes=1024)
         download_response = Mock()
+        download_response.__enter__ = Mock(return_value=download_response)
+        download_response.__exit__ = Mock(return_value=False)
         download_response.raise_for_status.return_value = None
         download_response.iter_content.return_value = [b"zip", b"-contents"]
 
@@ -153,6 +155,38 @@ class TestDownloadBatchAssignArtifact:
                     download_batch_assign_artifact(123)
 
         get.assert_called_once()
+
+    def test_rejects_stream_that_exceeds_its_reported_metadata_size(self, app):
+        metadata_response = self._metadata_response(size_in_bytes=1)
+        download_response = Mock()
+        download_response.__enter__ = Mock(return_value=download_response)
+        download_response.__exit__ = Mock(return_value=False)
+        download_response.raise_for_status.return_value = None
+        download_response.iter_content.return_value = [
+            b"x" * MAX_ARTIFACT_ARCHIVE_BYTES
+        ]
+
+        jwt_p, token_p = _patch_token()
+        with app.app_context():
+            _with_app_creds(app)
+            with jwt_p, token_p, patch(
+                "application.blueprints.datamanager.services.github.requests.get",
+                side_effect=[metadata_response, download_response],
+            ):
+                with pytest.raises(GitHubArtifactError, match="20 MB or larger"):
+                    download_batch_assign_artifact(123)
+
+    def test_rejects_expired_artifact(self, app):
+        metadata_response = self._metadata_response(expired=True)
+        jwt_p, token_p = _patch_token()
+        with app.app_context():
+            _with_app_creds(app)
+            with jwt_p, token_p, patch(
+                "application.blueprints.datamanager.services.github.requests.get",
+                return_value=metadata_response,
+            ):
+                with pytest.raises(GitHubArtifactError, match="expired"):
+                    download_batch_assign_artifact(123)
 
     def test_rejects_artifact_with_an_unapproved_name(self, app):
         metadata_response = self._metadata_response(name="unrelated-output")

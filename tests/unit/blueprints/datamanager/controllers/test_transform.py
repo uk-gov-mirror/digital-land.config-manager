@@ -51,20 +51,20 @@ def test_prepare_duplicate_candidates_does_not_auto_select_complete_matches_with
 def test_prepare_duplicate_candidates_sorts_by_old_then_new_entity():
     candidates = _prepare_duplicate_candidates(
         [
-            {"old_entity": "20", "entity": "300"},
+            {"old_entity": "10", "entity": "100"},
             {"old_entity": "2", "entity": "100"},
-            {"old_entity": "20", "entity": "30"},
-            {"old_entity": "2", "entity": "10"},
+            {"old_entity": "10", "entity": "2"},
+            {"old_entity": "2", "entity": "2"},
         ]
     )
 
     assert [
         (candidate["old_entity"], candidate["entity"]) for candidate in candidates
     ] == [
-        ("2", "10"),
+        ("2", "2"),
         ("2", "100"),
-        ("20", "30"),
-        ("20", "300"),
+        ("10", "2"),
+        ("10", "100"),
     ]
 
 
