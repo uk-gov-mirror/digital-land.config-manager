@@ -69,6 +69,8 @@ def _missing_column_tasks(task_log):
     """
     tasks = []
     for item in task_log:
+        if not isinstance(item, dict):
+            continue
         if item.get("task-source") != "column-field":
             continue
         details = _task_details(item) or {}
@@ -92,6 +94,8 @@ def _issue_tasks(task_log, quality_criteria_levels):
     """
     aggregated = {}
     for item in task_log:
+        if not isinstance(item, dict):
+            continue
         if item.get("task-source") != "issue":
             continue
         if item.get("responsibility") == "internal":

@@ -142,6 +142,16 @@ class TestIssueTasks:
         tasks = _issue_tasks(task_log, QUALITY_CRITERIA_LEVELS)
         assert tasks == [(2, "1 issue of type invalid geometry in geometry")]
 
+    def test_ignores_non_dict_entries(self):
+        task_log = [
+            None,
+            "not a task",
+            _issue_task("invalid geometry", "geometry", summary="Invalid geometry"),
+        ]
+        assert _issue_tasks(task_log, QUALITY_CRITERIA_LEVELS) == [
+            (2, "Invalid geometry")
+        ]
+
     def test_ignores_entries_with_unusable_details(self):
         task_log = [
             {"task-source": "issue", "details": "not json", "summary": "x"},
@@ -163,3 +173,11 @@ class TestMissingColumnTasks:
     def test_ignores_non_column_field_entries(self):
         task_log = [_issue_task("invalid date", "start-date", summary="Invalid date")]
         assert _missing_column_tasks(task_log) == []
+
+    def test_ignores_non_dict_entries(self):
+        task_log = [
+            None,
+            "not a task",
+            _column_field_task("reference", summary="Reference column missing"),
+        ]
+        assert _missing_column_tasks(task_log) == ["Reference column missing"]
