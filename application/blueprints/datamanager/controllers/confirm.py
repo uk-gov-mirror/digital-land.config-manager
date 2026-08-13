@@ -25,6 +25,10 @@ from ..services.entity_claims import (
     release_claims,
     release_others,
 )
+from ..services.assign_entity_resources import (
+    PROCESSED,
+    set_assign_entity_resource_status,
+)
 from ..services.github import (
     config_branch_changed_for_collection,
     trigger_add_data_async_workflow,
@@ -143,6 +147,7 @@ def handle_add_data_confirm(
     return_url: str | None = None,
     override: bool = False,
 ):
+    req = None
     request_meta = db.session.get(RequestMeta, request_id)
     endpoints_to_retire = (
         load_json_list(request_meta.endpoints_to_retire) if request_meta else []
@@ -296,6 +301,22 @@ def handle_add_data_confirm(
         _release_dispatch(request_id)
         logger.error(f"Failed to trigger async workflow: {result['message']}")
         raise ControllerError(f"Failed to trigger async workflow: {result['message']}")
+
+    if source_flow == "assign_entities":
+        if req is None:
+            try:
+                req = fetch_request(request_id)
+            except AsyncAPIError as e:
+                logger.warning(
+                    "Workflow dispatched for %s, but resource status could not be recorded: %s",
+                    request_id,
+                    e,
+                )
+        resource = ((req or {}).get("params") or {}).get("resource")
+        if resource:
+            set_assign_entity_resource_status(
+                resource, PROCESSED, _confirm_user_login()
+            )
 
     # On success, assign-entities returns to its summary page; add-data to the
     # dashboard (or the caller's return_url).

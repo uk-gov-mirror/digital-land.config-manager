@@ -18,6 +18,11 @@ from .request_meta import record_branch_baseline, record_source_flow
 from .transform import handle_check_transform
 from ..services.async_api import AsyncAPIError, fetch_request, submit_request
 from ..services.dataset import get_collection_id, get_dataset_id, get_dataset_name
+from ..services.assign_entity_resources import (
+    IN_PROGRESS,
+    get_assign_entity_resource_statuses,
+    set_assign_entity_resource_status,
+)
 from ..services.github import (
     GitHubAppError,
     GitHubArtifactError,
@@ -256,7 +261,9 @@ def _resource_error_sort_key(resource):
         ),
         default=99,
     )
-    row_order = {"entity_growth": 0, "orange": 1, "red": 2}.get(resource["row_type"], 3)
+    row_order = {"entity_growth": 0, "yellow": 1, "red": 2}.get(
+        resource["row_type"], 3
+    )
     return (
         row_order,
         error_order,
@@ -283,8 +290,8 @@ def _group_resources(df):
             row_type = "entity_growth"
             row_colour = ""
         elif "EG" in error_abbreviations:
-            row_type = "orange"
-            row_colour = "orange"
+            row_type = "yellow"
+            row_colour = "yellow"
         else:
             row_type = "red"
             row_colour = "red"
@@ -578,11 +585,20 @@ def handle_flagged_resources_summary():
         return redirect(url_for("assign_entities.flagged_resources_start"))
 
     resources = _group_resources(df)
+    statuses = get_assign_entity_resource_statuses(
+        [resource["resource"] for resource in resources]
+    )
+    for resource in resources:
+        resource["processing"] = statuses.get(resource["resource"])
+    error_category_counts = {
+        row_type: sum(resource["row_type"] == row_type for resource in resources)
+        for row_type in ("entity_growth", "yellow", "red")
+    }
     return render_template(
         "datamanager/flagged-resources-summary.html",
         resources=resources,
         error_key=_build_error_key(resources),
-        resource_count=len(resources),
+        error_category_counts=error_category_counts,
     )
 
 
@@ -605,6 +621,9 @@ def handle_flagged_resource_submit():
         )
     except AsyncAPIError as e:
         raise ControllerError(f"Assign entities submission failed: {e.detail}") from e
+
+    actor_username = (session.get("user") or {}).get("login", "unknown")
+    set_assign_entity_resource_status(resource, IN_PROGRESS, actor_username)
 
     return redirect(
         url_for(

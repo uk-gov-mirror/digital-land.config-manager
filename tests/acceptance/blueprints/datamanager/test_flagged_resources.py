@@ -8,7 +8,7 @@ from unittest.mock import patch
 import responses as rsps
 
 from application.blueprints.base.views import ADD_DATA_LOCK, ASSIGN_ENTITIES_LOCK
-from application.db.models import RequestMeta, ServiceLock
+from application.db.models import AssignEntityResource, RequestMeta, ServiceLock
 from application.extensions import db
 from config.config import get_request_api_endpoint
 from application.blueprints.datamanager.services.github import GitHubArtifactError
@@ -433,7 +433,6 @@ def test_csv_upload_groups_resource_dataset_combinations(client):
     assert response.status_code == 200
     assert b"Assign Entities - Flagged Resources" in response.data
     assert b"CSV import results" not in response.data
-    assert b"resources require review" in response.data
     assert response.data.count(b">resource-a</button>") == 1
     assert b"resource-b" in response.data
     assert response.data.index(b">resource-a</button>") < response.data.index(
@@ -455,7 +454,7 @@ def test_csv_upload_groups_resource_dataset_combinations(client):
     assert b"Errors" in response.data
     assert b"No." in response.data
     assert b"govuk-tag--red" in response.data
-    assert b"govuk-tag--orange" in response.data
+    assert b"govuk-tag--yellow" in response.data
     assert b"govuk-tag--grey" in response.data
     assert b'name="errors" value="LARGE_NUMBER_OF_NEW_ENTITIES"' in response.data
     assert b">EG</strong>" in response.data
@@ -494,14 +493,12 @@ def test_csv_upload_groups_resource_dataset_combinations(client):
     assert error_key_html.index(b">EG</strong>") < error_key_html.index(
         b">CRE</strong>"
     )
+    assert b"background-color: #fff7bf" in response.data
     assert b"background-color: #ffd8b0" in response.data
-    assert b"background-color: #f6d7d2" in response.data
     assert b"background-color: #d4edda" not in response.data
-    assert b"White" in response.data
-    assert b"Orange" in response.data
-    assert b"Entity growth is above threshold" in response.data
-    assert b"Entity growth is above threshold (needs careful review)" in response.data
-    assert b"Red" in response.data
+    assert b"aria-label=\"Error summary\"" in response.data
+    assert b"Entity growth" in response.data
+    assert b"Needs review" in response.data
     assert b"Other errors" in response.data
     assert b"Multiple errors" not in response.data
     assert b"No code" not in response.data
@@ -1444,6 +1441,8 @@ def test_assign_entities_check_results_post_resubmits_changed_redirect_selection
 
 @rsps.activate
 def test_resource_link_submits_assign_entities_request(client):
+    with client.session_transaction() as sess:
+        sess.pop("user", None)
     import_response = client.post(
         "/assign-entities/import",
         data={"csv_data": CSV_INPUT},
@@ -1491,6 +1490,9 @@ def test_resource_link_submits_assign_entities_request(client):
     record_branch_baseline.assert_called_once_with(
         "assign-id-1", "config-manager-update"
     )
+    status = db.session.get(AssignEntityResource, "resource-a")
+    assert status.status == "in_progress"
+    assert status.actor_username == "unknown"
     assert len(rsps.calls) == 1
     assert rsps.calls[0].request.url == ASYNC_BASE
     assert rsps.calls[0].request.headers["Content-Type"] == "application/json"
@@ -1507,6 +1509,39 @@ def test_resource_link_submits_assign_entities_request(client):
             "return_endpoint": "assign_entities.flagged_resources_summary",
         }
     }
+
+
+def test_flagged_resources_summary_shows_persisted_and_cleared_processing_status(client):
+    import_response = client.post(
+        "/assign-entities/import",
+        data={"csv_data": CSV_INPUT},
+    )
+    assert import_response.status_code == 302
+    db.session.merge(
+        AssignEntityResource(
+            resource="resource-a",
+            status="processed",
+            actor_username="test-user",
+            updated_at=datetime(2026, 8, 12, 14, 30),
+        )
+    )
+    db.session.commit()
+
+    response = client.get("/assign-entities/resources")
+
+    assert response.status_code == 200
+    assert b"<th scope=\"col\" class=\"govuk-table__header\">Status</th>" in response.data
+    assert b"Processed" in response.data
+    assert b"(test-user)" in response.data
+
+    record = db.session.get(AssignEntityResource, "resource-a")
+    record.status = None
+    db.session.commit()
+
+    response = client.get("/assign-entities/resources")
+
+    assert response.status_code == 200
+    assert b"Not started" in response.data
 
 
 @rsps.activate
