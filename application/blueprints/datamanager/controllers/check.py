@@ -1,3 +1,4 @@
+import json
 import logging
 from datetime import datetime
 
@@ -19,6 +20,9 @@ from ..services.dataset import (
 from ..services.dataset_field import (
     get_field_names_for_dataset,
 )
+from ..services.issue_type import (
+    get_quality_criteria_levels,
+)
 from ..services.organisation import (
     get_organisation_name,
 )
@@ -33,12 +37,106 @@ logger = logging.getLogger(__name__)
 
 _ROWS_PER_PAGE = 500
 
+# Quality criteria levels same as check for block/non block
+_BLOCKING_LEVEL = 2
+_NON_BLOCKING_LEVEL = 3
+
 
 def _assign_column_mapping(column_mapping, col_name, field_name):
     for existing_col, existing_field in list(column_mapping.items()):
         if existing_col != col_name and existing_field == field_name:
             del column_mapping[existing_col]
     column_mapping[col_name] = field_name
+
+
+def _task_details(item):
+    """Parse the JSON `details` string on a task-log entry, or None if unusable."""
+    details = item.get("details")
+    if not isinstance(details, str) or not details:
+        return None
+    try:
+        parsed = json.loads(details)
+    except (json.JSONDecodeError, TypeError):
+        return None
+    return parsed if isinstance(parsed, dict) else None
+
+
+def _missing_column_tasks(task_log):
+    """Missing mandatory columns, from column-field task-log entries.
+
+    These always block adding data, whether or not the pipeline generated a
+    summary for them.
+    """
+    tasks = []
+    for item in task_log:
+        if item.get("task-source") != "column-field":
+            continue
+        details = _task_details(item) or {}
+        field = details.get("field")
+        summary = item.get("summary")
+        if not summary:
+            if not field:
+                continue
+            summary = f"{field} column is missing"
+        tasks.append(summary)
+    return tasks
+
+
+def _issue_tasks(task_log, quality_criteria_levels):
+    """Issues from the task log, aggregated by issue type and field.
+
+    Mirrors the check results in submit: internal issues are dropped, each
+    issue is given its quality criteria level from the issue_type table, and
+    only levels 2 and 3 are kept. Returns a list of
+    (quality_criteria_level, summary) tuples.
+    """
+    aggregated = {}
+    for item in task_log:
+        if item.get("task-source") != "issue":
+            continue
+        if item.get("responsibility") == "internal":
+            continue
+
+        details = _task_details(item)
+        if not details:
+            continue
+        issue_type = details.get("issue_type")
+        field = details.get("field")
+        if not issue_type or not field:
+            continue
+
+        level = quality_criteria_levels.get(issue_type)
+        # Field-specific override for 'missing value' issues on 'reference'
+        if issue_type == "missing value" and field == "reference":
+            level = _BLOCKING_LEVEL
+        if level not in (_BLOCKING_LEVEL, _NON_BLOCKING_LEVEL):
+            continue
+
+        count = details.get("count") or 1
+        key = (issue_type, field)
+        existing = aggregated.get(key)
+        if existing:
+            existing["count"] += count
+        else:
+            aggregated[key] = {
+                "issue_type": issue_type,
+                "field": field,
+                "level": level,
+                "count": count,
+                "summary": item.get("summary"),
+            }
+
+    tasks = []
+    for task in aggregated.values():
+        summary = task["summary"]
+        if not summary:
+            plural = "s" if task["count"] > 1 else ""
+            summary = (
+                f"{task['count']} issue{plural} of type "
+                f"{task['issue_type']} in {task['field']}"
+            )
+        tasks.append((task["level"], summary))
+    return tasks
 
 
 def handle_check_results(request_id, result):
@@ -172,18 +270,17 @@ def handle_check_results(request_id, result):
         column_mapping, unmapped_columns, user_column_mapping, spec_fields
     )
 
-    # must_fix: task-log entries flagged as missing columns (task-source == "column-field")
-    # fixable: all other task-log issues (value errors, etc.)
+    # must_fix: missing columns, plus issues whose quality criteria level is
+    #           blocking (level 2) - these stop data being added
+    # should_fix: issues at the non-blocking level (level 3)
     # passed_checks: every field that column-mapping confirms is present
-    must_fix = [
-        item["summary"]
-        for item in task_log
-        if item.get("task-source") == "column-field" and item.get("summary")
+    quality_criteria_levels = get_quality_criteria_levels()
+    issue_tasks = _issue_tasks(task_log, quality_criteria_levels)
+    must_fix = _missing_column_tasks(task_log) + [
+        summary for level, summary in issue_tasks if level == _BLOCKING_LEVEL
     ]
-    fixable = [
-        item["summary"]
-        for item in task_log
-        if item.get("task-source") != "column-field" and item.get("summary")
+    should_fix = [
+        summary for level, summary in issue_tasks if level == _NON_BLOCKING_LEVEL
     ]
     passed_checks = [
         f"Column mapped: {entry['field']}"
@@ -205,7 +302,7 @@ def handle_check_results(request_id, result):
         geometries=geometries,
         geometry_points=geometry_points,
         must_fix=must_fix,
-        fixable=fixable,
+        should_fix=should_fix,
         passed_checks=passed_checks,
         allow_add_data=allow_add_data,
         can_override=can_override,
