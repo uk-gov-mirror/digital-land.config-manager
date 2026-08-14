@@ -10,7 +10,7 @@
       <h2 class="govuk-error-summary__title">Data cannot be added</h2>
       <div class="govuk-error-summary__body">
         <p>
-          <strong>Please address the columns not found before adding data</strong>
+          <strong>Please address the issues you must fix before adding data</strong>
         </p>
       </div>
     </div>
@@ -92,7 +92,7 @@
         <!-- Must fix (blocking issues) -->
         {% if must_fix %}
         <h2 class="govuk-heading-m govuk-!-margin-top-4">
-          Columns not found
+          Issues you must fix before adding data
         </h2>
         <div class="govuk-width-container">
           <ul class="govuk-task-list">
@@ -100,7 +100,7 @@
             <li class="govuk-task-list__item govuk-task-list__item--with-link">
               <div class="govuk-task-list__name-and-hint">{{ issue }}</div>
               <div class="govuk-task-list__status">
-                <strong class="govuk-tag govuk-tag--red">Not found</strong>
+                <strong class="govuk-tag govuk-tag--red">Must fix</strong>
               </div>
             </li>
             {% endfor %}
@@ -108,18 +108,19 @@
         </div>
         {% endif %}
 
-        <!-- Fixable issues -->
-        {% if fixable %}
+        <!-- Should fix (non-blocking issues) -->
+        {% if should_fix %}
         <h2 class="govuk-heading-m govuk-!-margin-top-4">
-          Error summary
+          Issues you should fix
         </h2>
+        <p class="govuk-body">Data can be added with these issues, but they should be fixed to improve data quality.</p>
         <div class="govuk-width-container">
           <ul class="govuk-task-list">
-            {% for issue in fixable %}
+            {% for issue in should_fix %}
             <li class="govuk-task-list__item govuk-task-list__item--with-link">
               <div class="govuk-task-list__name-and-hint">{{ issue }}</div>
               <div class="govuk-task-list__status">
-                <strong class="govuk-tag govuk-tag--yellow">Needs fixing</strong>
+                <strong class="govuk-tag govuk-tag--yellow">Needs improving</strong>
               </div>
             </li>
             {% endfor %}

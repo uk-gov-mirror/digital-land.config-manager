@@ -15,6 +15,7 @@ from unittest.mock import patch
 import responses as rsps
 
 ASYNC_BASE = "http://localhost:8000/requests"
+ISSUE_TYPE_URL = "https://datasette.planning.data.gov.uk/digital-land/issue_type.json"
 
 CSV_INPUT = (
     "organisation,pipelines,documentation-url,endpoint-url,start-date,plugin,licence\n"
@@ -243,6 +244,12 @@ class TestAddDataJourney:
             rsps.GET,
             f"{ASYNC_BASE}/check-id-1/response-details",
             json=RESP_DETAILS_WITH_GEOM,
+            status=200,
+        )
+        rsps.add(
+            rsps.GET,
+            ISSUE_TYPE_URL,
+            json={"rows": [], "next_url": None},
             status=200,
         )
         # Boundary URL fetch is not registered — rsps raises ConnectionError which check.py catches
