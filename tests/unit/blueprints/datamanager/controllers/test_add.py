@@ -6,7 +6,7 @@ from application.blueprints.datamanager.services.github import (
     GitHubAppError,
     GitHubWorkflowError,
 )
-from application.db.models import EntityClaim, RequestMeta
+from application.db.models import AssignEntityResource, EntityClaim, RequestMeta
 from application.extensions import db
 
 _CONFIRM = "application.blueprints.datamanager.controllers.confirm"
@@ -125,11 +125,31 @@ class TestAddDataConfirmRoute:
         assert b"Add more data" in response.data
 
     def test_assign_entities_success_ignores_return_url(self, client):
+        db.session.add(
+            RequestMeta(
+                request_id="confirm-assign-linkback",
+                source_flow="assign_entities",
+                branch_sha="base-sha",
+            )
+        )
+        db.session.commit()
         with client.session_transaction() as sess:
             sess["user"] = {"login": "test-user"}
         with patch(
             "application.blueprints.datamanager.controllers.confirm.trigger_add_data_async_workflow",
             return_value={"success": True, "message": "Workflow triggered"},
+        ), patch(
+            "application.blueprints.datamanager.controllers.confirm.fetch_request",
+            return_value={
+                "params": {
+                    "collection": "tree",
+                    "dataset": "tree",
+                    "resource": "resource-a",
+                }
+            },
+        ), patch(
+            "application.blueprints.datamanager.controllers.confirm.config_branch_changed_for_collection",
+            return_value=False,
         ):
             response = client.post(
                 "/datamanager/add-data/confirm-assign-linkback/confirm-async",
@@ -141,6 +161,9 @@ class TestAddDataConfirmRoute:
         assert response.status_code == 200
         assert b'href="/assign-entities/resources"' in response.data
         assert b"Assign more entities" in response.data
+        record = db.session.get(AssignEntityResource, ("resource-a", "tree", ""))
+        assert record.status == "processed"
+        assert record.actor_username == "test-user"
 
     def test_confirm_blocks_when_branch_changed(self, client):
         db.session.add(

@@ -4,6 +4,8 @@ GitHub App service for authenticating and triggering workflows.
 
 import time
 import logging
+from io import BytesIO
+
 import requests
 import jwt
 from flask import current_app
@@ -25,6 +27,12 @@ class GitHubAppAuthError(GitHubAppError):
 
 class GitHubWorkflowError(GitHubAppError):
     """Raised when workflow trigger fails"""
+
+    pass
+
+
+class GitHubArtifactError(GitHubAppError):
+    """Raised when an artifact cannot be safely downloaded."""
 
     pass
 
@@ -114,6 +122,153 @@ def get_installation_token(jwt_token: str, installation_id: str) -> str:
         if hasattr(e, "response") and e.response is not None:
             logger.error(f"Response: {e.response.text}")
         raise GitHubAppAuthError(f"Failed to get installation token: {e}")
+
+
+_BATCH_ASSIGN_ARTIFACT_NAMES = (
+    "batch-assign-odp-output",
+    "batch-assign-mandated-output",
+    "batch-assign-single-source-output",
+)
+_BATCH_ASSIGN_FALLBACK_ARTIFACT_NAME = "generated-files"
+_ALLOWED_BATCH_ASSIGN_ARTIFACT_NAMES = {
+    *_BATCH_ASSIGN_ARTIFACT_NAMES,
+    _BATCH_ASSIGN_FALLBACK_ARTIFACT_NAME,
+}
+MAX_ARTIFACT_ARCHIVE_BYTES = 20 * 1024 * 1024
+
+
+def _latest_artifact_named(access_token: str, name: str) -> dict | None:
+    """Return the latest artifact with ``name`` from digital-land/config."""
+    github_api_base_url = current_app.config["GITHUB_API_BASE_URL"]
+    github_org = current_app.config.get("GITHUB_ORG", "digital-land")
+    url = f"{github_api_base_url}/repos/{github_org}/config/actions/artifacts"
+
+    try:
+        response = requests.get(
+            url,
+            headers=_github_headers(access_token),
+            params={"name": name, "per_page": 100},
+            timeout=10,
+        )
+        response.raise_for_status()
+    except requests.exceptions.RequestException as e:
+        logger.error(f"Failed to list GitHub artifacts named '{name}': {e}")
+        raise GitHubAppError(
+            f"Failed to list GitHub artifacts named '{name}': {e}"
+        ) from e
+
+    artifacts = response.json().get("artifacts") or []
+    if not artifacts:
+        return None
+
+    # Do not rely on the API response order when choosing the latest artifact.
+    return max(artifacts, key=lambda artifact: artifact.get("created_at") or "")
+
+
+def get_latest_batch_assign_artifacts() -> list[dict]:
+    """
+    Return the latest config-repository artifact for each batch-assign output.
+
+    ``generated-files`` is used only when none of the three batch-assign artifact
+    names exist.
+    """
+    access_token = _get_access_token()
+    artifacts = []
+    for name in _BATCH_ASSIGN_ARTIFACT_NAMES:
+        try:
+            artifact = _latest_artifact_named(access_token, name)
+        except GitHubAppError:
+            logger.exception("Unable to load batch assign artifact %s", name)
+            continue
+        if artifact is not None:
+            artifacts.append(artifact)
+
+    if not artifacts:
+        try:
+            fallback = _latest_artifact_named(
+                access_token, _BATCH_ASSIGN_FALLBACK_ARTIFACT_NAME
+            )
+        except GitHubAppError:
+            logger.exception(
+                "Unable to load batch assign artifact %s",
+                _BATCH_ASSIGN_FALLBACK_ARTIFACT_NAME,
+            )
+            fallback = None
+        if fallback is not None:
+            artifacts.append(fallback)
+
+    return artifacts
+
+
+def download_batch_assign_artifact(artifact_id: int) -> bytes:
+    """Validate and download a batch-assign artifact ZIP smaller than 20 MB."""
+    try:
+        access_token = _get_access_token()
+    except GitHubAppError as e:
+        raise GitHubArtifactError(
+            "The artifact could not be loaded from GitHub. Try again later."
+        ) from e
+    github_api_base_url = current_app.config["GITHUB_API_BASE_URL"]
+    github_org = current_app.config.get("GITHUB_ORG", "digital-land")
+    artifact_url = (
+        f"{github_api_base_url}/repos/{github_org}/config/actions/artifacts/"
+        f"{artifact_id}"
+    )
+
+    try:
+        metadata_response = requests.get(
+            artifact_url, headers=_github_headers(access_token), timeout=10
+        )
+        metadata_response.raise_for_status()
+        metadata = metadata_response.json()
+    except requests.exceptions.RequestException as e:
+        logger.error(f"Failed to read GitHub artifact {artifact_id}: {e}")
+        raise GitHubArtifactError(
+            "The artifact could not be loaded from GitHub. Try again later."
+        ) from e
+
+    if metadata.get("name") not in _ALLOWED_BATCH_ASSIGN_ARTIFACT_NAMES:
+        raise GitHubArtifactError("That artifact is not a batch assign output.")
+    if metadata.get("expired"):
+        raise GitHubArtifactError("That GitHub artifact has expired.")
+
+    archive_size = metadata.get("size_in_bytes")
+    if (
+        isinstance(archive_size, (int, float))
+        and archive_size >= MAX_ARTIFACT_ARCHIVE_BYTES
+    ):
+        raise GitHubArtifactError(
+            "This artifact is 20 MB or larger. Download it from GitHub and upload "
+            "the CSV instead."
+        )
+
+    archive_url = f"{artifact_url}/zip"
+    try:
+        with requests.get(
+            archive_url,
+            headers=_github_headers(access_token),
+            allow_redirects=True,
+            stream=True,
+            timeout=(10, 60),
+        ) as download_response:
+            download_response.raise_for_status()
+            archive = BytesIO()
+            for chunk in download_response.iter_content(chunk_size=64 * 1024):
+                archive.write(chunk)
+                if archive.tell() >= MAX_ARTIFACT_ARCHIVE_BYTES:
+                    raise GitHubArtifactError(
+                        "This artifact is 20 MB or larger. Download it from GitHub and "
+                        "upload the CSV instead."
+                    )
+    except GitHubArtifactError:
+        raise
+    except requests.exceptions.RequestException as e:
+        logger.error(f"Failed to download GitHub artifact {artifact_id}: {e}")
+        raise GitHubArtifactError(
+            "The artifact could not be downloaded from GitHub. Try again later."
+        ) from e
+
+    return archive.getvalue()
 
 
 def get_branch_head_sha(branch: str) -> str | None:

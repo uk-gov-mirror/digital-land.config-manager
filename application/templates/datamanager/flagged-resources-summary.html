@@ -17,10 +17,19 @@
       Only resources with errors are shown.
     </p>
 
-    <div class="govuk-!-margin-top-4 govuk-!-margin-bottom-6" style="background-color: #f3f2f1; padding: 15px 20px; border-left: 4px solid #1d70b8;">
-      <p class="govuk-body govuk-!-margin-bottom-0">
-        <strong>{{ resource_count }}</strong> resource{{ '' if resource_count == 1 else 's' }} require review.
-      </p>
+    {% set error_categories = [
+      {"id": "entity_growth", "label": "Entity growth", "hint": "above threshold", "bg": "#ffffff", "bar": "#505a5f"},
+      {"id": "yellow", "label": "Needs review", "hint": "entity growth and other errors", "bg": "#fff7bf", "bar": "#b59b00"},
+      {"id": "red", "label": "Other errors", "hint": "not an entity-growth-only error", "bg": "#ffd8b0", "bar": "#d4692a"}
+    ] %}
+    <div class="app-stat-boxes govuk-!-margin-bottom-6" aria-label="Error summary">
+      {% for category in error_categories %}
+      <div class="app-stat-box" style="background-color: {{ category.bg }}; border-top-color: {{ category.bar }};">
+        <span class="app-stat-box__number">{{ error_category_counts[category.id] }}</span>
+        <span class="app-stat-box__label">{{ category.label }}</span>
+        <span class="app-stat-box__hint">{{ category.hint }}</span>
+      </div>
+      {% endfor %}
     </div>
 
     <div class="app-scrollable-container app-scrollable">
@@ -29,6 +38,7 @@
           <tr class="govuk-table__row">
             <th scope="col" class="govuk-table__header">No.</th>
             <th scope="col" class="govuk-table__header">Resource</th>
+            <th scope="col" class="govuk-table__header">Status</th>
             <th scope="col" class="govuk-table__header">Dataset</th>
             <th scope="col" class="govuk-table__header">Organisation</th>
             <th scope="col" class="govuk-table__header">Errors</th>
@@ -36,7 +46,7 @@
         </thead>
         <tbody class="govuk-table__body">
           {% for resource in resources %}
-          <tr class="govuk-table__row" {% if resource.row_colour == 'orange' %}style="background-color: #ffd8b0;"{% elif resource.row_colour == 'red' %}style="background-color: #f6d7d2;"{% endif %}>
+          <tr class="govuk-table__row" {% if resource.row_colour == 'yellow' %}style="background-color: #fff7bf;"{% elif resource.row_colour == 'red' %}style="background-color: #ffd8b0;"{% endif %}>
             <td class="govuk-table__cell">{{ loop.index }}</td>
             <td class="govuk-table__cell">
               <form method="post" action="{{ url_for('assign_entities.flagged_resource_submit') }}" class="govuk-!-margin-bottom-0">
@@ -47,12 +57,24 @@
                 <button type="submit" class="govuk-link" style="background: none; border: 0; padding: 0; color: #1d70b8; text-decoration: underline; cursor: pointer; font: inherit;">{{ resource.resource }}</button>
               </form>
             </td>
+            <td class="govuk-table__cell">
+              {% if resource.processing and resource.processing.status %}
+                <strong class="govuk-tag {% if resource.processing.status == 'processed' %}govuk-tag--green{% else %}govuk-tag--blue{% endif %}">
+                  {{ resource.processing.status | replace('_', ' ') | title }}
+                </strong>
+                <span class="govuk-hint govuk-!-margin-top-1 govuk-!-margin-bottom-0">
+                  ({{ resource.processing.actor_username }})
+                </span>
+              {% else %}
+                Not started
+              {% endif %}
+            </td>
             <td class="govuk-table__cell">{{ resource.dataset }}</td>
             <td class="govuk-table__cell">{{ resource.organisation }}</td>
             <td class="govuk-table__cell">
               {% if resource.errors %}
                 {% for error in resource.errors %}
-                <strong class="govuk-tag {% if resource.row_colour == 'orange' %}govuk-tag--orange{% elif resource.row_colour == 'red' %}govuk-tag--red{% else %}govuk-tag--grey{% endif %} govuk-!-margin-right-1 govuk-!-margin-bottom-1">{{ error.abbreviation }}</strong>
+                <strong class="govuk-tag {% if resource.row_colour == 'yellow' %}govuk-tag--yellow{% elif resource.row_colour == 'red' %}govuk-tag--red{% else %}govuk-tag--grey{% endif %} govuk-!-margin-right-1 govuk-!-margin-bottom-1">{{ error.abbreviation }}</strong>
                 {% endfor %}
               {% endif %}
             </td>
@@ -61,12 +83,6 @@
         </tbody>
       </table>
     </div>
-    <ul class="govuk-list govuk-body-s govuk-!-margin-top-4 govuk-!-margin-bottom-6" style="color: #505a5f;">
-      <li><span style="display: inline-block; width: 0.35em; height: 0.35em; border: 1px solid #0b0c0c; border-radius: 50%; background-color: #ffffff; vertical-align: 0; margin-left: 0.15em;"></span> <strong>White</strong> — Entity growth is above threshold</li>
-      <li><strong style="color: #f47738;">&#9679;</strong> <strong>Orange</strong> — Entity growth is above threshold (needs careful review)</li>
-      <li><strong style="color: #d4351c;">&#9679;</strong> <strong>Red</strong> — Other errors</li>
-    </ul>
-
     {% if error_key %}
     <h2 class="govuk-heading-m govuk-!-margin-top-6">Error key</h2>
     <dl class="govuk-summary-list">

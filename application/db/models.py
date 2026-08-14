@@ -54,3 +54,23 @@ class EntityClaim(db.Model):
             name="uq_entity_claim_collection_entity_branch",
         ),
     )
+
+
+class AssignEntityResource(db.Model):
+    """The current Assign Entities processing state for a unique resource."""
+
+    __tablename__ = "assign_entity_resource"
+
+    resource = db.Column(db.Text, primary_key=True)
+    dataset = db.Column(db.Text, primary_key=True)
+    organisation = db.Column(db.Text, primary_key=True)
+    status = db.Column(db.Text, nullable=True)
+    actor_username = db.Column(db.Text, nullable=False)
+    updated_at = db.Column(db.DateTime, nullable=False, default=datetime.utcnow)
+
+    __table_args__ = (
+        db.CheckConstraint(
+            "status IN ('in_progress', 'processed')",
+            name="ck_assign_entity_resource_status",
+        ),
+    )

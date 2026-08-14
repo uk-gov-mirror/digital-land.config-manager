@@ -317,6 +317,19 @@ def _dedup_candidate_redirect_key(candidate: dict) -> tuple[str, str]:
     )
 
 
+def _dedup_entity_sort_key(value) -> tuple[int, int | str]:
+    """Sort entity identifiers numerically when possible, otherwise by text."""
+    normalised = str(value or "").strip()
+    return (0, int(normalised)) if normalised.isdigit() else (1, normalised.casefold())
+
+
+def _dedup_candidate_sort_key(candidate: dict) -> tuple[tuple[int, int | str], ...]:
+    return (
+        _dedup_entity_sort_key(candidate.get("old_entity")),
+        _dedup_entity_sort_key(candidate.get("entity")),
+    )
+
+
 def _old_entity_redirect_key(row: dict) -> tuple[str, str]:
     return (
         str(row.get("old-entity", "") or row.get("old_entity", "") or "").strip(),
@@ -454,7 +467,7 @@ def _prepare_duplicate_candidates(
     }
     target_classification_available = bool(new_entity_ids or existing_entity_ids)
     prepared_candidates = []
-    for candidate in candidates:
+    for candidate in sorted(candidates, key=_dedup_candidate_sort_key):
         candidate_redirect_key = _dedup_candidate_redirect_key(candidate)
         selected_redirect_key = _dedup_candidate_selected_redirect_key(candidate)
         target_entity = str(candidate.get("entity", "") or "").strip()

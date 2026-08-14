@@ -48,6 +48,26 @@ def test_prepare_duplicate_candidates_does_not_auto_select_complete_matches_with
     assert candidates[0]["auto_select"] is False
 
 
+def test_prepare_duplicate_candidates_sorts_by_old_then_new_entity():
+    candidates = _prepare_duplicate_candidates(
+        [
+            {"old_entity": "10", "entity": "100"},
+            {"old_entity": "2", "entity": "100"},
+            {"old_entity": "10", "entity": "2"},
+            {"old_entity": "2", "entity": "2"},
+        ]
+    )
+
+    assert [
+        (candidate["old_entity"], candidate["entity"]) for candidate in candidates
+    ] == [
+        ("2", "2"),
+        ("2", "100"),
+        ("10", "2"),
+        ("10", "100"),
+    ]
+
+
 def test_prepare_duplicate_candidates_auto_selects_old_entity_rows():
     candidates = _prepare_duplicate_candidates(
         [

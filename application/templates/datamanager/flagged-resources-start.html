@@ -25,6 +25,69 @@
         <button type="button" class="govuk-button govuk-!-margin-bottom-0" onclick="document.getElementById('csv-file-upload').click()">Upload CSV file</button>
       </form>
     </div>
+
+    <h2 class="govuk-heading-m govuk-!-margin-top-6">Latest batch assign outputs</h2>
+    {% if artifact_error %}
+      <div class="govuk-error-summary" data-module="govuk-error-summary">
+        <div role="alert">
+          <h3 class="govuk-error-summary__title">There is a problem</h3>
+          <div class="govuk-error-summary__body">
+            <p class="govuk-body">{{ artifact_error }}</p>
+          </div>
+        </div>
+      </div>
+    {% endif %}
+    <div id="artifact-size-error" class="govuk-error-summary" data-module="govuk-error-summary" tabindex="-1" hidden>
+      <div role="alert">
+        <h3 class="govuk-error-summary__title">The artifact is too large</h3>
+        <div class="govuk-error-summary__body">
+          <p class="govuk-body">This artifact is 20 MB or larger. Download it from GitHub and upload the CSV instead.</p>
+        </div>
+      </div>
+    </div>
+    {% if artifact_lookup_failed %}
+      <p class="govuk-body">The latest GitHub artifacts could not be loaded. Try again later.</p>
+    {% elif artifacts %}
+      <table class="govuk-table">
+        <thead class="govuk-table__head">
+          <tr class="govuk-table__row">
+            <th scope="col" class="govuk-table__header">Artifact</th>
+            <th scope="col" class="govuk-table__header">Created</th>
+            {% if show_artifact_size %}
+              <th scope="col" class="govuk-table__header">Size</th>
+            {% endif %}
+            <th scope="col" class="govuk-table__header">Actions</th>
+          </tr>
+        </thead>
+        <tbody class="govuk-table__body">
+          {% for artifact in artifacts %}
+            <tr class="govuk-table__row">
+              <td class="govuk-table__cell">
+                <form method="post" action="{{ url_for('assign_entities.flagged_artifact_assign', artifact_id=artifact.id) }}" class="app-artifact-form" data-artifact-too-large="{{ 'true' if artifact.is_too_large else 'false' }}">
+                  <button type="submit" class="govuk-link app-link-button"{% if artifact.is_too_large %} aria-describedby="artifact-too-large-{{ artifact.id }}"{% endif %}>{{ artifact.name }}</button>
+                  {% if artifact.is_too_large %}
+                    <span id="artifact-too-large-{{ artifact.id }}" class="govuk-hint govuk-!-margin-bottom-0">Too large to import. Download and upload the CSV instead.</span>
+                  {% endif %}
+                </form>
+              </td>
+              <td class="govuk-table__cell">
+                <time datetime="{{ artifact.created_at }}">{{ artifact.created_at_display }}</time>
+              </td>
+              {% if show_artifact_size %}
+                <td class="govuk-table__cell">{{ artifact.size_display or 'Not available' }}</td>
+              {% endif %}
+              <td class="govuk-table__cell">
+                {% if artifact.workflow_run_url %}
+                  <a class="govuk-link" href="{{ artifact.workflow_run_url }}" target="_blank" rel="noopener noreferrer">View workflow run<span class="govuk-visually-hidden"> for {{ artifact.name }} (opens in new tab)</span></a>
+                {% endif %}
+              </td>
+            </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    {% else %}
+      <p class="govuk-body">No batch assign output artifacts were found.</p>
+    {% endif %}
   </div>
 </div>
 {% endblock %}
@@ -36,6 +99,17 @@
       if (this.files.length > 0) {
         this.closest("form").submit();
       }
+    });
+
+    document.querySelectorAll(".app-artifact-form").forEach(function(form) {
+      form.addEventListener("submit", function(event) {
+        if (form.dataset.artifactTooLarge === "true") {
+          event.preventDefault();
+          const error = document.getElementById("artifact-size-error");
+          error.hidden = false;
+          error.focus();
+        }
+      });
     });
   });
 </script>

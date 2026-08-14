@@ -3,10 +3,14 @@ from unittest.mock import patch, Mock
 import pytest
 
 from application.blueprints.datamanager.services.github import (
+    MAX_ARTIFACT_ARCHIVE_BYTES,
     GitHubAppAuthError,
+    GitHubArtifactError,
     GitHubWorkflowError,
     config_branch_changed_for_collection,
+    download_batch_assign_artifact,
     generate_jwt,
+    get_latest_batch_assign_artifacts,
     get_branch_head_sha,
     get_config_baseline_sha,
     trigger_add_data_async_workflow,
@@ -36,6 +40,165 @@ class TestGenerateJwt:
     def test_raises_on_invalid_key(self):
         with pytest.raises(GitHubAppAuthError):
             generate_jwt(app_id="123", private_key="not-a-valid-key")
+
+
+class TestGetLatestBatchAssignArtifacts:
+    def _artifact(self, name, artifact_id, created_at):
+        return {"id": artifact_id, "name": name, "created_at": created_at}
+
+    def test_returns_latest_artifact_for_each_batch_assign_name(self, app):
+        responses = []
+        for name in (
+            "batch-assign-odp-output",
+            "batch-assign-mandated-output",
+            "batch-assign-single-source-output",
+        ):
+            response = Mock()
+            response.raise_for_status.return_value = None
+            response.json.return_value = {
+                "artifacts": [
+                    self._artifact(name, 1, "2026-08-09T10:00:00Z"),
+                    self._artifact(name, 2, "2026-08-10T10:00:00Z"),
+                ]
+            }
+            responses.append(response)
+
+        jwt_p, token_p = _patch_token()
+        with app.app_context():
+            _with_app_creds(app)
+            with jwt_p, token_p, patch(
+                "application.blueprints.datamanager.services.github.requests.get",
+                side_effect=responses,
+            ) as get:
+                artifacts = get_latest_batch_assign_artifacts()
+
+        assert [artifact["id"] for artifact in artifacts] == [2, 2, 2]
+        assert [call.kwargs["params"]["name"] for call in get.call_args_list] == [
+            "batch-assign-odp-output",
+            "batch-assign-mandated-output",
+            "batch-assign-single-source-output",
+        ]
+
+    def test_uses_generated_files_only_when_no_batch_assign_artifacts_exist(self, app):
+        empty_responses = []
+        for _ in range(3):
+            response = Mock()
+            response.raise_for_status.return_value = None
+            response.json.return_value = {"artifacts": []}
+            empty_responses.append(response)
+
+        fallback_response = Mock()
+        fallback_response.raise_for_status.return_value = None
+        fallback_response.json.return_value = {
+            "artifacts": [self._artifact("generated-files", 9, "2026-08-10T11:00:00Z")]
+        }
+
+        jwt_p, token_p = _patch_token()
+        with app.app_context():
+            _with_app_creds(app)
+            with jwt_p, token_p, patch(
+                "application.blueprints.datamanager.services.github.requests.get",
+                side_effect=[*empty_responses, fallback_response],
+            ) as get:
+                artifacts = get_latest_batch_assign_artifacts()
+
+        assert [artifact["name"] for artifact in artifacts] == ["generated-files"]
+        assert get.call_args_list[-1].kwargs["params"]["name"] == "generated-files"
+
+
+class TestDownloadBatchAssignArtifact:
+    def _metadata_response(self, **overrides):
+        response = Mock()
+        response.raise_for_status.return_value = None
+        response.json.return_value = {
+            "name": "batch-assign-odp-output",
+            "expired": False,
+            **overrides,
+        }
+        return response
+
+    def test_uses_metadata_size_before_streaming_download(self, app):
+        metadata_response = self._metadata_response(size_in_bytes=1024)
+        download_response = Mock()
+        download_response.__enter__ = Mock(return_value=download_response)
+        download_response.__exit__ = Mock(return_value=False)
+        download_response.raise_for_status.return_value = None
+        download_response.iter_content.return_value = [b"zip", b"-contents"]
+
+        jwt_p, token_p = _patch_token()
+        with app.app_context():
+            _with_app_creds(app)
+            with jwt_p, token_p, patch(
+                "application.blueprints.datamanager.services.github.requests.get",
+                side_effect=[metadata_response, download_response],
+            ) as get:
+                result = download_batch_assign_artifact(123)
+
+        assert result == b"zip-contents"
+        assert get.call_count == 2
+        assert get.call_args_list[1].kwargs["allow_redirects"] is True
+        assert get.call_args_list[1].args[0].endswith("/actions/artifacts/123/zip")
+
+    def test_rejects_archive_that_is_not_smaller_than_20_mb(self, app):
+        metadata_response = self._metadata_response(
+            size_in_bytes=MAX_ARTIFACT_ARCHIVE_BYTES
+        )
+
+        jwt_p, token_p = _patch_token()
+        with app.app_context():
+            _with_app_creds(app)
+            with jwt_p, token_p, patch(
+                "application.blueprints.datamanager.services.github.requests.get",
+                return_value=metadata_response,
+            ) as get:
+                with pytest.raises(GitHubArtifactError, match="20 MB or larger"):
+                    download_batch_assign_artifact(123)
+
+        get.assert_called_once()
+
+    def test_rejects_stream_that_exceeds_its_reported_metadata_size(self, app):
+        metadata_response = self._metadata_response(size_in_bytes=1)
+        download_response = Mock()
+        download_response.__enter__ = Mock(return_value=download_response)
+        download_response.__exit__ = Mock(return_value=False)
+        download_response.raise_for_status.return_value = None
+        download_response.iter_content.return_value = [
+            b"x" * MAX_ARTIFACT_ARCHIVE_BYTES
+        ]
+
+        jwt_p, token_p = _patch_token()
+        with app.app_context():
+            _with_app_creds(app)
+            with jwt_p, token_p, patch(
+                "application.blueprints.datamanager.services.github.requests.get",
+                side_effect=[metadata_response, download_response],
+            ):
+                with pytest.raises(GitHubArtifactError, match="20 MB or larger"):
+                    download_batch_assign_artifact(123)
+
+    def test_rejects_expired_artifact(self, app):
+        metadata_response = self._metadata_response(expired=True)
+        jwt_p, token_p = _patch_token()
+        with app.app_context():
+            _with_app_creds(app)
+            with jwt_p, token_p, patch(
+                "application.blueprints.datamanager.services.github.requests.get",
+                return_value=metadata_response,
+            ):
+                with pytest.raises(GitHubArtifactError, match="expired"):
+                    download_batch_assign_artifact(123)
+
+    def test_rejects_artifact_with_an_unapproved_name(self, app):
+        metadata_response = self._metadata_response(name="unrelated-output")
+        jwt_p, token_p = _patch_token()
+        with app.app_context():
+            _with_app_creds(app)
+            with jwt_p, token_p, patch(
+                "application.blueprints.datamanager.services.github.requests.get",
+                return_value=metadata_response,
+            ):
+                with pytest.raises(GitHubArtifactError, match="not a batch assign"):
+                    download_batch_assign_artifact(123)
 
 
 class TestTriggerAddDataAsyncWorkflow:
