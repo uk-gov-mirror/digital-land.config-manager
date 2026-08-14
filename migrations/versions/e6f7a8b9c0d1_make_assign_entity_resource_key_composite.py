@@ -42,14 +42,12 @@ def upgrade():
         ),
         sa.PrimaryKeyConstraint("resource", "dataset", "organisation"),
     )
-    op.execute(
-        """
+    op.execute("""
         INSERT INTO assign_entity_resource_new
             (resource, dataset, organisation, status, actor_username, updated_at)
         SELECT resource, '', '', status, actor_username, updated_at
         FROM assign_entity_resource
-        """
-    )
+        """)
     op.drop_table("assign_entity_resource")
     op.rename_table("assign_entity_resource_new", "assign_entity_resource")
 
@@ -75,14 +73,12 @@ def downgrade():
         ),
         sa.PrimaryKeyConstraint("resource"),
     )
-    op.execute(
-        """
+    op.execute("""
         INSERT INTO assign_entity_resource_old
             (resource, status, actor_username, updated_at)
         SELECT resource, status, actor_username, updated_at
         FROM assign_entity_resource
         WHERE dataset = '' AND organisation = ''
-        """
-    )
+        """)
     op.drop_table("assign_entity_resource")
     op.rename_table("assign_entity_resource_old", "assign_entity_resource")
