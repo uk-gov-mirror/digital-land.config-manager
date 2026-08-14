@@ -16,9 +16,20 @@ depends_on = None
 
 
 def upgrade():
-    op.drop_table("assign_entity_resource")
+    bind = op.get_bind()
+    inspector = sa.inspect(bind)
+    if not inspector.has_table("assign_entity_resource"):
+        return
+    primary_key = inspector.get_pk_constraint("assign_entity_resource")
+    if primary_key.get("constrained_columns") == [
+        "resource",
+        "dataset",
+        "organisation",
+    ]:
+        return
+
     op.create_table(
-        "assign_entity_resource",
+        "assign_entity_resource_new",
         sa.Column("resource", sa.Text(), nullable=False),
         sa.Column("dataset", sa.Text(), nullable=False),
         sa.Column("organisation", sa.Text(), nullable=False),
@@ -31,12 +42,29 @@ def upgrade():
         ),
         sa.PrimaryKeyConstraint("resource", "dataset", "organisation"),
     )
+    op.execute(
+        """
+        INSERT INTO assign_entity_resource_new
+            (resource, dataset, organisation, status, actor_username, updated_at)
+        SELECT resource, '', '', status, actor_username, updated_at
+        FROM assign_entity_resource
+        """
+    )
+    op.drop_table("assign_entity_resource")
+    op.rename_table("assign_entity_resource_new", "assign_entity_resource")
 
 
 def downgrade():
-    op.drop_table("assign_entity_resource")
+    bind = op.get_bind()
+    inspector = sa.inspect(bind)
+    if not inspector.has_table("assign_entity_resource"):
+        return
+    primary_key = inspector.get_pk_constraint("assign_entity_resource")
+    if primary_key.get("constrained_columns") == ["resource"]:
+        return
+
     op.create_table(
-        "assign_entity_resource",
+        "assign_entity_resource_old",
         sa.Column("resource", sa.Text(), nullable=False),
         sa.Column("status", sa.Text(), nullable=True),
         sa.Column("actor_username", sa.Text(), nullable=False),
@@ -47,3 +75,14 @@ def downgrade():
         ),
         sa.PrimaryKeyConstraint("resource"),
     )
+    op.execute(
+        """
+        INSERT INTO assign_entity_resource_old
+            (resource, status, actor_username, updated_at)
+        SELECT resource, status, actor_username, updated_at
+        FROM assign_entity_resource
+        WHERE dataset = '' AND organisation = ''
+        """
+    )
+    op.drop_table("assign_entity_resource")
+    op.rename_table("assign_entity_resource_old", "assign_entity_resource")

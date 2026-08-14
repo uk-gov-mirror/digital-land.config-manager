@@ -19,6 +19,8 @@ def upgrade():
     op.create_table(
         "assign_entity_resource",
         sa.Column("resource", sa.Text(), nullable=False),
+        sa.Column("dataset", sa.Text(), nullable=False),
+        sa.Column("organisation", sa.Text(), nullable=False),
         sa.Column("status", sa.Text(), nullable=True),
         sa.Column("actor_username", sa.Text(), nullable=False),
         sa.Column("updated_at", sa.DateTime(), nullable=False),
@@ -26,7 +28,7 @@ def upgrade():
             "status IN ('in_progress', 'processed')",
             name="ck_assign_entity_resource_status",
         ),
-        sa.PrimaryKeyConstraint("resource"),
+        sa.PrimaryKeyConstraint("resource", "dataset", "organisation"),
     )
 
 
