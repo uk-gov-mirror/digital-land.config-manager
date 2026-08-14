@@ -143,6 +143,7 @@ class TestAddDataConfirmRoute:
             return_value={
                 "params": {
                     "collection": "tree",
+                    "dataset": "tree",
                     "resource": "resource-a",
                 }
             },
@@ -160,7 +161,7 @@ class TestAddDataConfirmRoute:
         assert response.status_code == 200
         assert b'href="/assign-entities/resources"' in response.data
         assert b"Assign more entities" in response.data
-        record = db.session.get(AssignEntityResource, "resource-a")
+        record = db.session.get(AssignEntityResource, ("resource-a", "tree", ""))
         assert record.status == "processed"
         assert record.actor_username == "test-user"
 

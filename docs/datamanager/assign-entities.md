@@ -83,9 +83,10 @@ entities".
 
 #### Resource status
 
-The flagged-resources summary shows the current status beside each resource. Status is keyed only
-by the resource hash in the `assign_entity_resource` table and includes the actor username and
-last-updated timestamp. A resource becomes `in_progress` after its async assessment is submitted.
+The flagged-resources summary shows the current status beside each resource. Status is keyed by the
+combination of resource hash, dataset, and organisation in the `assign_entity_resource` table and
+includes the actor username and last-updated timestamp. A resource becomes `in_progress` after its
+async assessment is submitted.
 It becomes `processed` after config-manager successfully dispatches the GitHub workflow. This
 means `processed` records a successful dispatch, not completion of the downstream workflow.
 

@@ -312,10 +312,16 @@ def handle_add_data_confirm(
                     request_id,
                     e,
                 )
-        resource = ((req or {}).get("params") or {}).get("resource")
-        if resource:
+        params = (req or {}).get("params") or {}
+        resource = params.get("resource")
+        dataset = params.get("dataset")
+        if resource and dataset:
             set_assign_entity_resource_status(
-                resource, PROCESSED, _confirm_user_login()
+                resource,
+                dataset,
+                params.get("organisation") or params.get("organisationName"),
+                PROCESSED,
+                _confirm_user_login(),
             )
 
     # On success, assign-entities returns to its summary page; add-data to the

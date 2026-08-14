@@ -588,10 +588,15 @@ def handle_flagged_resources_summary():
 
     resources = _group_resources(df)
     statuses = get_assign_entity_resource_statuses(
-        [resource["resource"] for resource in resources]
+        [
+            (resource["resource"], resource["dataset"], resource["organisation"])
+            for resource in resources
+        ]
     )
     for resource in resources:
-        resource["processing"] = statuses.get(resource["resource"])
+        resource["processing"] = statuses.get(
+            (resource["resource"], resource["dataset"], resource["organisation"])
+        )
     error_category_counts = {
         row_type: sum(resource["row_type"] == row_type for resource in resources)
         for row_type in ("entity_growth", "yellow", "red")
@@ -626,7 +631,9 @@ def handle_flagged_resource_submit():
 
     actor_username = (session.get("user") or {}).get("login", "unknown")
     try:
-        set_assign_entity_resource_status(resource, IN_PROGRESS, actor_username)
+        set_assign_entity_resource_status(
+            resource, dataset, organisation, IN_PROGRESS, actor_username
+        )
     except Exception:
         logger.exception("Could not record Assign Entities status for %s", resource)
 

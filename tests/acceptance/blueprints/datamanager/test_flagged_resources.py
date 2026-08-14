@@ -1490,7 +1490,9 @@ def test_resource_link_submits_assign_entities_request(client):
     record_branch_baseline.assert_called_once_with(
         "assign-id-1", "config-manager-update"
     )
-    status = db.session.get(AssignEntityResource, "resource-a")
+    status = db.session.get(
+        AssignEntityResource, ("resource-a", "tree", "local-authority:ABC")
+    )
     assert status.status == "in_progress"
     assert status.actor_username == "unknown"
     assert len(rsps.calls) == 1
@@ -1522,6 +1524,8 @@ def test_flagged_resources_summary_shows_persisted_and_cleared_processing_status
     db.session.merge(
         AssignEntityResource(
             resource="resource-a",
+            dataset="tree",
+            organisation="local-authority:ABC",
             status="processed",
             actor_username="test-user",
             updated_at=datetime(2026, 8, 12, 14, 30),
@@ -1536,7 +1540,9 @@ def test_flagged_resources_summary_shows_persisted_and_cleared_processing_status
     assert b"Processed" in response.data
     assert b"(test-user)" in response.data
 
-    record = db.session.get(AssignEntityResource, "resource-a")
+    record = db.session.get(
+        AssignEntityResource, ("resource-a", "tree", "local-authority:ABC")
+    )
     record.status = None
     db.session.commit()
 

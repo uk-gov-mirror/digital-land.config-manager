@@ -62,6 +62,8 @@ class AssignEntityResource(db.Model):
     __tablename__ = "assign_entity_resource"
 
     resource = db.Column(db.Text, primary_key=True)
+    dataset = db.Column(db.Text, primary_key=True)
+    organisation = db.Column(db.Text, primary_key=True)
     status = db.Column(db.Text, nullable=True)
     actor_username = db.Column(db.Text, nullable=False)
     updated_at = db.Column(db.DateTime, nullable=False, default=datetime.utcnow)
