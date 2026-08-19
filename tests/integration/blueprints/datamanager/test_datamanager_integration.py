@@ -28,6 +28,18 @@ COMPLETED_TRANSFORM_REQUEST = {
     },
 }
 
+
+def _add_response_details(url, details):
+    """The async API reports the row count in a header, so one page is enough."""
+    rsps.add(
+        rsps.GET,
+        url,
+        json=details,
+        status=200,
+        headers={"X-Pagination-Total-Results": str(len(details))},
+    )
+
+
 RESPONSE_DETAILS = [
     {
         "entry_number": 1,
@@ -282,8 +294,7 @@ class TestCheckTransformRoute:
             json=COMPLETED_TRANSFORM_REQUEST,
             status=200,
         )
-        rsps.add(rsps.GET, RESPONSE_DETAILS_URL, json=RESPONSE_DETAILS, status=200)
-        rsps.add(rsps.GET, RESPONSE_DETAILS_URL, json=[], status=200)
+        _add_response_details(RESPONSE_DETAILS_URL, RESPONSE_DETAILS)
         with patch(
             "application.blueprints.datamanager.controllers.transform.get_organisation_name",
             return_value="Test Org",
@@ -308,8 +319,7 @@ class TestCheckTransformRoute:
             json=COMPLETED_TRANSFORM_REQUEST,
             status=200,
         )
-        rsps.add(rsps.GET, RESPONSE_DETAILS_URL, json=RESPONSE_DETAILS, status=200)
-        rsps.add(rsps.GET, RESPONSE_DETAILS_URL, json=[], status=200)
+        _add_response_details(RESPONSE_DETAILS_URL, RESPONSE_DETAILS)
         with patch(
             "application.blueprints.datamanager.controllers.transform.get_organisation_name",
             return_value="Test Org",
@@ -333,8 +343,7 @@ class TestCheckTransformRoute:
             json=COMPLETED_TRANSFORM_REQUEST,
             status=200,
         )
-        rsps.add(rsps.GET, RESPONSE_DETAILS_URL, json=RESPONSE_DETAILS, status=200)
-        rsps.add(rsps.GET, RESPONSE_DETAILS_URL, json=[], status=200)
+        _add_response_details(RESPONSE_DETAILS_URL, RESPONSE_DETAILS)
         # Different name on the platform → a genuine change → orange "changed" row.
         platform_entities = [{"entity": 100, "name": "Old Area A"}]
         with patch(
@@ -365,8 +374,7 @@ class TestCheckTransformRoute:
             json=COMPLETED_TRANSFORM_REQUEST,
             status=200,
         )
-        rsps.add(rsps.GET, RESPONSE_DETAILS_URL, json=RESPONSE_DETAILS, status=200)
-        rsps.add(rsps.GET, RESPONSE_DETAILS_URL, json=[], status=200)
+        _add_response_details(RESPONSE_DETAILS_URL, RESPONSE_DETAILS)
         with patch(
             "application.blueprints.datamanager.controllers.transform.get_organisation_name",
             return_value="Test Org",
@@ -393,8 +401,7 @@ class TestCheckTransformRoute:
             json=COMPLETED_TRANSFORM_REQUEST,
             status=200,
         )
-        rsps.add(rsps.GET, RESPONSE_DETAILS_URL, json=RESPONSE_DETAILS, status=200)
-        rsps.add(rsps.GET, RESPONSE_DETAILS_URL, json=[], status=200)
+        _add_response_details(RESPONSE_DETAILS_URL, RESPONSE_DETAILS)
         platform_entities = [{"entity": 100, "name": "Old Name"}]
         with patch(
             "application.blueprints.datamanager.controllers.transform.get_organisation_name",
@@ -442,8 +449,7 @@ class TestCheckTransformRoute:
             status=200,
         )
         geo_details_url = f"{ASYNC_BASE}/geo-test-id/response-details"
-        rsps.add(rsps.GET, geo_details_url, json=details, status=200)
-        rsps.add(rsps.GET, geo_details_url, json=[], status=200)
+        _add_response_details(geo_details_url, details)
         with patch(
             "application.blueprints.datamanager.controllers.transform.get_organisation_name",
             return_value="Test Org",
@@ -479,8 +485,7 @@ class TestCheckTransformRoute:
             },
         }
         rsps.add(rsps.GET, f"{ASYNC_BASE}/test-id", json=request_json, status=200)
-        rsps.add(rsps.GET, RESPONSE_DETAILS_URL, json=RESPONSE_DETAILS, status=200)
-        rsps.add(rsps.GET, RESPONSE_DETAILS_URL, json=[], status=200)
+        _add_response_details(RESPONSE_DETAILS_URL, RESPONSE_DETAILS)
         with patch(
             "application.blueprints.datamanager.controllers.transform.get_organisation_name",
             return_value="Test Org",
@@ -517,8 +522,7 @@ class TestCheckTransformRoute:
             json=COMPLETED_TRANSFORM_REQUEST,
             status=200,
         )
-        rsps.add(rsps.GET, RESPONSE_DETAILS_URL, json=RESPONSE_DETAILS, status=200)
-        rsps.add(rsps.GET, RESPONSE_DETAILS_URL, json=[], status=200)
+        _add_response_details(RESPONSE_DETAILS_URL, RESPONSE_DETAILS)
         with patch(
             "application.blueprints.datamanager.controllers.transform.get_organisation_name",
             return_value="Test Org",

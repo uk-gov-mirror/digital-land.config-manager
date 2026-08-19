@@ -81,7 +81,7 @@ _DUPLICATE_FIXED_FIELDS = {
     "organisation_entity",
 }
 _ROWS_PER_PAGE = 500
-_PLATFORM_ENTITY_LIMIT = 10000
+_PLATFORM_ENTITY_LIMIT = 15000
 _GEO_FIELDS = {"geometry", "point"}
 _DATE_PREFIX_RE = re.compile(r"^(\d{4}-\d{2}-\d{2})[T ]")
 _CHANGED_VALUE_MAX_LEN = 200
@@ -578,13 +578,16 @@ def _fetch_platform_entities(organisation_code: str, dataset_id: str) -> tuple:
         if org_entity is not None
         else 0
     )
-    platform_too_large = existing_count > _PLATFORM_ENTITY_LIMIT
+    # A None count means the count call failed, not that there are no entities
+    platform_too_large = (existing_count or 0) > _PLATFORM_ENTITY_LIMIT
     platform_entities = (
-        get_entities_for_organisation_and_dataset(org_entity, dataset_id)
+        get_entities_for_organisation_and_dataset(
+            org_entity, dataset_id, total=existing_count
+        )
         if org_entity is not None and not platform_too_large
         else []
     )
-    return platform_entities, platform_too_large, existing_count
+    return platform_entities, platform_too_large, existing_count or 0
 
 
 def _paginate_entity_data(

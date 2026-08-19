@@ -1,5 +1,6 @@
 import json
 import logging
+from urllib.parse import urlencode
 
 import requests
 
@@ -7,9 +8,15 @@ from config.config import get_request_api_endpoint
 
 from application.extensions import cache
 
+from .data_access.http import (
+    PAGE_REQUEST_TIMEOUT,
+    fetch_pages_concurrently,
+    get_http_session,
+)
 from ..utils import REQUESTS_TIMEOUT
 
 logger = logging.getLogger(__name__)
+TOTAL_RESULTS_HEADER = "X-Pagination-Total-Results"
 
 
 def _requests_url() -> str:
@@ -88,19 +95,108 @@ def fetch_request(request_id: str) -> dict:
     return response.json() or {}
 
 
+def _total_results(response) -> int:
+    """Total rows available, from the API's pagination header, or None if absent."""
+    try:
+        return int(response.headers[TOTAL_RESULTS_HEADER])
+    except Exception:
+        return None
+
+
+def _log_first_batch(batch: list) -> None:
+    if not batch:
+        return
+    logger.info(
+        f"First batch sample - Item keys: {list(batch[0].keys()) if batch[0] else 'Empty item'}"
+    )
+    if batch[0] and "converted_row" in batch[0]:
+        converted_sample = batch[0]["converted_row"]
+        if converted_sample:
+            logger.info(
+                f"First converted_row sample: {dict(list(converted_sample.items())[:3])}"
+            )
+        else:
+            logger.info("Empty converted_row")
+
+
 @cache.memoize(timeout=3600)
 def fetch_response_details(
     request_id: str,
-    limit: int = 100,
+    limit: int = 500,
     start_offset: int = 0,
     max_rows: int = None,
 ) -> list:
     """
     Fetch response details for a request, handling pagination.
 
-    start_offset / max_rows allow fetching a bounded slice of rows so that
-    large datasets can be paged server-side without timing out.
+    The API reports the row count in an X-Pagination-Total-Results header, so once
+    the first page is in the rest are fetched in parallel. Falls back to sequential
+    paging when that header is missing.
     """
+    logger.info(
+        f"Fetching response details for request_id: {request_id}, "
+        f"start_offset={start_offset}, max_rows={max_rows}"
+    )
+    url = _response_details_url(request_id)
+    first_limit = min(limit, max_rows) if max_rows is not None else limit
+
+    try:
+        response = get_http_session().get(
+            url,
+            params={"offset": start_offset, "limit": first_limit},
+            timeout=PAGE_REQUEST_TIMEOUT,
+        )
+        response.raise_for_status()
+        first_batch = response.json() or []
+    except Exception as e:
+        logger.error(f"Failed to fetch first batch at offset {start_offset}: {e}")
+        return []
+
+    if start_offset == 0:
+        _log_first_batch(first_batch)
+
+    total_available = _total_results(response)
+    if total_available is None:
+        logger.warning(
+            f"No {TOTAL_RESULTS_HEADER} header on response details for {request_id} — "
+            "falling back to sequential paging"
+        )
+        return _fetch_response_details_sequentially(
+            request_id, limit, start_offset, max_rows
+        )
+
+    wanted = max(total_available - start_offset, 0)
+    if max_rows is not None:
+        wanted = min(wanted, max_rows)
+
+    all_details = list(first_batch)
+    offsets = range(start_offset + len(first_batch), start_offset + wanted, limit)
+    if offsets and first_batch:
+        urls = [
+            f"{url}?{urlencode({'offset': offset, 'limit': limit})}"
+            for offset in offsets
+        ]
+        for offset, page in zip(offsets, fetch_pages_concurrently(urls)):
+            if page is None:
+                logger.error(
+                    f"Response details page at offset {offset} failed for "
+                    f"{request_id} - returned rows are incomplete"
+                )
+                continue
+            all_details.extend(page)
+
+    all_details = all_details[:wanted]
+    logger.info(f"Total response details fetched: {len(all_details)}")
+    return all_details
+
+
+def _fetch_response_details_sequentially(
+    request_id: str,
+    limit: int,
+    start_offset: int,
+    max_rows: int,
+) -> list:
+    """Page through response details one request at a time, following batch sizes."""
     all_details = []
     offset = start_offset
     logger.info(
@@ -136,19 +232,8 @@ def fetch_response_details(
                 logger.info("No more batches available")
                 break
 
-            # Log sample of first batch for debugging
-            if offset == 0 and batch:
-                logger.info(
-                    f"First batch sample - Item keys: {list(batch[0].keys()) if batch[0] else 'Empty item'}"
-                )
-                if batch[0] and "converted_row" in batch[0]:
-                    converted_sample = batch[0]["converted_row"]
-                    if converted_sample:
-                        logger.info(
-                            f"First converted_row sample: {dict(list(converted_sample.items())[:3])}"
-                        )
-                    else:
-                        logger.info("Empty converted_row")
+            if offset == 0:
+                _log_first_batch(batch)
 
             all_details.extend(batch)
 
