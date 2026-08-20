@@ -215,11 +215,22 @@ the cache empty so the next page load retries.
 |---|---|---|---|
 | `ResponseDetailsIncomplete` | the exception's `.partial` rows | suppressed | "Some of the transformed data could not be fetched" + reload link |
 | `PlatformEntitiesIncomplete` | unaffected | suppressed | "The platform data could not be fetched" + reload link |
+| entity count unavailable (`None`) | unaffected | suppressed | same as `PlatformEntitiesIncomplete` |
 | count over `_PLATFORM_ENTITY_LIMIT` | unaffected | suppressed | existing "dataset too large" inset text |
 
 Suppressed means `comparison_unavailable` is passed to the template: the entity table and
 its summary stat boxes do not render, and an inset message explains why. The transform and
 issue log tables still render throughout.
+
+For `geography` datasets the map is built from the same two inputs, so it degrades with
+the comparison: `_build_geometry_features(..., compare=False)` returns only the resource's
+own geometry, with no `status` on any feature. The map JS already treats a statusless
+feature set as one neutral group (the check-results page relies on this), so the geometry
+stays visible without being miscategorised — no template or JS change needed.
+
+A `None` count is treated as a fetch failure rather than a zero. It determines which
+offsets get requested, so without it the too-large guard cannot be evaluated and paging
+would fall back to an unbounded serial walk inside the web request.
 
 **When adding a new paged fetch,** follow the same contract — raise on an incomplete
 result, let the controller decide how to degrade, and never return a partial list from a

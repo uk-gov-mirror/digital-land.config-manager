@@ -38,7 +38,8 @@ def get_entity_count_for_organisation_and_dataset(
     try:
         response = requests.get(url, timeout=REQUESTS_TIMEOUT)
         response.raise_for_status()
-        return response.json().get("count", 0)
+        # No count key means we don't know the size, which is not the same as zero.
+        return response.json().get("count")
     except Exception as e:
         logger.error(
             f"Failed to fetch entity count for organisation_entity="
@@ -90,6 +91,13 @@ def get_entities_for_organisation_and_dataset(
                 f"{organisation_entity} dataset={dataset}"
             )
         entities.extend(page.get("entities", []))
+
+    # Catches a page that returned 200 with fewer rows than the count implied.
+    if len(entities) < total:
+        raise PlatformEntitiesIncomplete(
+            f"Expected {total} entities for organisation_entity={organisation_entity} "
+            f"dataset={dataset} but got {len(entities)}"
+        )
 
     logger.info(
         f"Fetched {len(entities)} of {total} entities for organisation_entity="

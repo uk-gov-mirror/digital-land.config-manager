@@ -44,6 +44,24 @@ class TestGetEntityCount:
             ):
                 assert get_entity_count_for_organisation_and_dataset(1, "tree") is None
 
+    def test_missing_count_key_is_unknown_not_zero(self, app):
+        resp = MagicMock()
+        resp.raise_for_status = MagicMock()
+        resp.json.return_value = {"entities": []}
+        with app.app_context():
+            with patch(f"{PLANNING_DATA_MODULE}.requests.get", return_value=resp):
+                assert get_entity_count_for_organisation_and_dataset(1, "tree") is None
+
+    def test_genuine_zero_count_returns_zero(self, app):
+        # An org with no entities is a real answer, not a failure: everything in
+        # the resource is legitimately new.
+        resp = MagicMock()
+        resp.raise_for_status = MagicMock()
+        resp.json.return_value = {"count": 0, "entities": []}
+        with app.app_context():
+            with patch(f"{PLANNING_DATA_MODULE}.requests.get", return_value=resp):
+                assert get_entity_count_for_organisation_and_dataset(1, "tree") == 0
+
 
 class TestGetEntitiesForOrganisationAndDataset:
     def test_fetches_every_page_in_parallel_when_total_is_known(self, app):
@@ -143,3 +161,13 @@ class TestGetEntitiesForOrganisationAndDataset:
 
         assert len(result) == ENTITY_PAGE_SIZE + 30
         assert mock_get.call_count == 2
+
+    def test_short_page_count_raises(self, app):
+        # Pages returned 200 but with fewer rows than the count implied.
+        pages = [{"entities": _entities(0, 400)}]
+        with app.app_context():
+            with patch(
+                f"{PLANNING_DATA_MODULE}.fetch_pages_concurrently", return_value=pages
+            ):
+                with pytest.raises(PlatformEntitiesIncomplete):
+                    get_entities_for_organisation_and_dataset(17, "short", total=500)

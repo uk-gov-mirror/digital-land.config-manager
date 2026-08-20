@@ -183,21 +183,58 @@ class TestFetchResponseDetails:
 
         assert [row["entry_number"] for row in result] == list(range(1000))
 
-    def test_returns_empty_when_the_first_page_fails(self, app):
+    def test_first_page_failure_raises_rather_than_caching_an_empty_result(self, app):
+        # Returning [] would be memoized for an hour and render as "no rows".
         session = Mock()
         session.get.side_effect = Exception("connection reset")
         with patch(
             "application.blueprints.datamanager.services.async_api.get_http_session",
             return_value=session,
         ):
-            assert fetch_response_details("first-page-fails") == []
+            with pytest.raises(ResponseDetailsIncomplete):
+                fetch_response_details("first-page-fails")
 
-    def test_transport_failure_during_sequential_fallback_is_handled(self, app):
-        # Headerless first page sends us down the sequential path; the transport
-        # then fails before any response is bound, which used to raise
-        # UnboundLocalError out of the error handler itself.
+    def test_short_first_page_without_header_needs_no_sequential_refetch(self, app):
+        # A page shorter than the limit is the last page, so don't page again.
         with self._patch_first_page(_page_response(_rows(0, 10))), patch(
+            "application.blueprints.datamanager.services.async_api.requests.get"
+        ) as sequential_get:
+            result = fetch_response_details("short-first-page")
+
+        assert len(result) == 10
+        sequential_get.assert_not_called()
+
+    def test_transport_failure_during_sequential_fallback_raises_with_partial(
+        self, app
+    ):
+        # A full headerless first page sends us down the sequential path. The
+        # transport then fails before any response is bound, which used to raise
+        # UnboundLocalError out of the error handler itself.
+        with self._patch_first_page(_page_response(_rows(0, 500))), patch(
             "application.blueprints.datamanager.services.async_api.requests.get",
             side_effect=Exception("connection reset"),
         ):
-            assert fetch_response_details("sequential-transport-failure") == []
+            with pytest.raises(ResponseDetailsIncomplete) as excinfo:
+                fetch_response_details("sequential-transport-failure")
+
+        # The seeded first page is carried through rather than refetched or lost.
+        assert len(excinfo.value.partial) == 500
+
+    def test_sequential_fallback_does_not_refetch_the_first_page(self, app):
+        second_page = Mock()
+        second_page.json.return_value = _rows(500, 10)
+        second_page.raise_for_status.return_value = None
+        second_page.status_code = 200
+        second_page.content = b"[]"
+        second_page.text = "[]"
+
+        with self._patch_first_page(_page_response(_rows(0, 500))), patch(
+            "application.blueprints.datamanager.services.async_api.requests.get",
+            return_value=second_page,
+        ) as sequential_get:
+            result = fetch_response_details("seeded-sequential")
+
+        assert [row["entry_number"] for row in result] == list(range(510))
+        # One call only: the seeded first page is not requested a second time.
+        assert sequential_get.call_count == 1
+        assert sequential_get.call_args.kwargs["params"]["offset"] == 500

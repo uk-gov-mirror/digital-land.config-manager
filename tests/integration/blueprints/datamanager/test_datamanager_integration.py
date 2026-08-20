@@ -366,6 +366,10 @@ class TestCheckTransformRoute:
                 ):
                     with patch(
                         "application.blueprints.datamanager.controllers"
+                        ".transform.get_entity_count_for_organisation_and_dataset",
+                        return_value=len(platform_entities),
+                    ), patch(
+                        "application.blueprints.datamanager.controllers"
                         ".transform.get_entities_for_organisation_and_dataset",
                         return_value=platform_entities,
                     ):
@@ -422,6 +426,10 @@ class TestCheckTransformRoute:
                     return_value=400,
                 ):
                     with patch(
+                        "application.blueprints.datamanager.controllers"
+                        ".transform.get_entity_count_for_organisation_and_dataset",
+                        return_value=len(platform_entities),
+                    ), patch(
                         "application.blueprints.datamanager.controllers"
                         ".transform.get_entities_for_organisation_and_dataset",
                         return_value=platform_entities,

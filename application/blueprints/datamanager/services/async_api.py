@@ -163,8 +163,12 @@ def fetch_response_details(
         response.raise_for_status()
         first_batch = response.json() or []
     except Exception as e:
-        logger.error(f"Failed to fetch first batch at offset {start_offset}: {e}")
-        return []
+        # Returning [] here would cache "this resource has no rows" for the full
+        # memoize timeout, and render it with no warning.
+        raise ResponseDetailsIncomplete(
+            f"First response details page at offset {start_offset} failed for "
+            f"{request_id}: {e}"
+        ) from e
 
     if start_offset == 0:
         _log_first_batch(first_batch)
@@ -175,8 +179,11 @@ def fetch_response_details(
             f"No {TOTAL_RESULTS_HEADER} header on response details for {request_id} — "
             "falling back to sequential paging"
         )
+        if len(first_batch) < first_limit:
+            # Short page means there is nothing after it, so no need to page at all.
+            return first_batch
         return _fetch_response_details_sequentially(
-            request_id, limit, start_offset, max_rows
+            request_id, limit, start_offset, max_rows, seed=first_batch
         )
 
     wanted = max(total_available - start_offset, 0)
@@ -186,7 +193,7 @@ def fetch_response_details(
     all_details = list(first_batch)
     failed_offsets = []
     offsets = range(start_offset + len(first_batch), start_offset + wanted, limit)
-    if offsets and first_batch:
+    if offsets:
         urls = [
             f"{url}?{urlencode({'offset': offset, 'limit': limit})}"
             for offset in offsets
@@ -198,10 +205,11 @@ def fetch_response_details(
             all_details.extend(page)
 
     all_details = all_details[:wanted]
-    if failed_offsets:
+    # Shortfall also catches pages that returned 200 with fewer rows than expected.
+    if failed_offsets or len(all_details) < wanted:
         raise ResponseDetailsIncomplete(
-            f"Response details pages at offsets {failed_offsets} failed for "
-            f"{request_id} - got {len(all_details)} of {wanted} rows",
+            f"Response details incomplete for {request_id} - got {len(all_details)} "
+            f"of {wanted} rows, failed offsets {failed_offsets}",
             partial=all_details,
         )
 
@@ -214,10 +222,16 @@ def _fetch_response_details_sequentially(
     limit: int,
     start_offset: int,
     max_rows: int,
+    seed: list = None,
 ) -> list:
-    """Page through response details one request at a time, following batch sizes."""
-    all_details = []
-    offset = start_offset
+    """
+    Page through response details one request at a time, following batch sizes.
+
+    `seed` carries rows the caller already fetched, so the first page isn't requested
+    twice. Raises ResponseDetailsIncomplete if a page fails part way through.
+    """
+    all_details = list(seed or [])
+    offset = start_offset + len(all_details)
     logger.info(
         f"Fetching response details for request_id: {request_id}, "
         f"start_offset={start_offset}, max_rows={max_rows}"
@@ -266,14 +280,17 @@ def _fetch_response_details_sequentially(
             offset += fetch_limit
 
         except Exception as e:
-            logger.error(f"Failed to fetch batch at offset {offset}: {e}")
             logger.error(f"Response status: {getattr(response, 'status_code', 'N/A')}")
             response_text = getattr(response, "text", "N/A")
             if hasattr(response_text, "__getitem__"):
                 logger.error(f"Response text: {response_text[:500]}")
             else:
                 logger.error(f"Response text: {response_text}")
-            break
+            # Returning the rows gathered so far would be memoized as if complete.
+            raise ResponseDetailsIncomplete(
+                f"Failed to fetch batch at offset {offset} for {request_id}: {e}",
+                partial=all_details,
+            ) from e
 
     logger.info(f"Total response details fetched: {len(all_details)}")
     return all_details

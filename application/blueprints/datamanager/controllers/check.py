@@ -10,6 +10,7 @@ from . import ControllerError
 from .transform import _point_feature, fetch_boundary_geojson
 from ..services.async_api import (
     AsyncAPIError,
+    ResponseDetailsIncomplete,
     fetch_request,
     fetch_response_details,
     submit_request,
@@ -180,9 +181,16 @@ def handle_check_results(request_id, result):
 
     page_number = max(1, int(request.args.get("page_number", 1)))
     start_offset = (page_number - 1) * _ROWS_PER_PAGE
-    resp_details = fetch_response_details(
-        request_id, start_offset=start_offset, max_rows=_ROWS_PER_PAGE
-    )
+    details_incomplete = False
+    try:
+        resp_details = fetch_response_details(
+            request_id, start_offset=start_offset, max_rows=_ROWS_PER_PAGE
+        )
+    except ResponseDetailsIncomplete as e:
+        logger.error("Response details incomplete for %s: %s", request_id, e)
+        resp_details = e.partial
+        details_incomplete = True
+
     has_next_page = len(resp_details) >= _ROWS_PER_PAGE
     page_start = start_offset + 1
     page_end = start_offset + len(resp_details)
@@ -314,6 +322,7 @@ def handle_check_results(request_id, result):
         transformed_table=transformed_table,
         issue_log_table=issue_log_table,
         boundary_geojson_url=boundary_geojson_url,
+        details_incomplete=details_incomplete,
         request_id=request_id,
         mapping_rows=mapping_rows,
         spec_fields=sorted(spec_fields),

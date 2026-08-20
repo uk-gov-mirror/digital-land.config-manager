@@ -584,8 +584,13 @@ def _fetch_platform_entities(organisation_code: str, dataset_id: str) -> tuple:
         if org_entity is not None
         else 0
     )
-    # A None count means the count call failed, not that there are no entities
-    platform_too_large = (existing_count or 0) > _PLATFORM_ENTITY_LIMIT
+    if org_entity is not None and existing_count is None:
+        # Without a count the too-large guard can't be evaluated and paging would
+        # run unbounded inside the request.
+        logger.error("Entity count unavailable for %s", organisation_code)
+        return [], False, 0, True
+
+    platform_too_large = existing_count > _PLATFORM_ENTITY_LIMIT
     try:
         platform_entities = (
             get_entities_for_organisation_and_dataset(
@@ -596,9 +601,9 @@ def _fetch_platform_entities(organisation_code: str, dataset_id: str) -> tuple:
         )
     except PlatformEntitiesIncomplete as e:
         logger.error("Platform entities incomplete for %s: %s", organisation_code, e)
-        return [], platform_too_large, existing_count or 0, True
+        return [], platform_too_large, existing_count, True
 
-    return platform_entities, platform_too_large, existing_count or 0, False
+    return platform_entities, platform_too_large, existing_count, False
 
 
 def _paginate_entity_data(
@@ -731,12 +736,19 @@ def _point_feature(shapely_geom, point_wkt, properties: dict) -> dict:
 
 
 def _build_geometry_features(
-    platform_entities: list, all_resp_details: list, dataset_id: str
+    platform_entities: list,
+    all_resp_details: list,
+    dataset_id: str,
+    compare: bool = True,
 ) -> tuple:
     """Return (polygon_features, point_features).
 
     polygon_features keep the original geometry for the boundary layers;
     point_features carry one representative point per entity for clustering.
+
+    With compare=False only the resource's own geometry is returned, untagged. The
+    map falls back to one neutral group when no feature carries a status, so an
+    unusable comparison shows geometry without miscategorising it.
     """
     platform_by_id = {
         _normalise_entity_id(str(e.get("entity", ""))): e
@@ -755,7 +767,7 @@ def _build_geometry_features(
     features = []
     points = []
 
-    for entity in platform_entities:
+    for entity in platform_entities if compare else []:
         entity_id = _normalise_entity_id(str(entity.get("entity", "")))
         if entity_id in resource_entity_ids:
             continue
@@ -804,7 +816,9 @@ def _build_geometry_features(
         shape_wkt = (geom_fact or {}).get("value") or (point_fact or {}).get("value")
         if not shape_wkt:
             continue
-        if entity_id in platform_entity_ids:
+        if not compare:
+            status = None
+        elif entity_id in platform_entity_ids:
             resource_fields = {
                 f.get("field", ""): f.get("value", "")
                 for f in transformed_row
@@ -827,8 +841,9 @@ def _build_geometry_features(
                     or f"Entry {item.get('entry_number')}"
                 ),
                 "name": converted_row.get("name", ""),
-                "status": status,
             }
+            if status is not None:
+                properties["status"] = status
             features.append(
                 {"type": "Feature", "geometry": mapping(shp), "properties": properties}
             )
@@ -1012,7 +1027,10 @@ def handle_check_transform(
     # and any new or updated resource entities with geometry.
     if dataset_typology == "geography":
         geometries, geometry_points = _build_geometry_features(
-            platform_entities, all_resp_details, dataset_id
+            platform_entities,
+            all_resp_details,
+            dataset_id,
+            compare=not comparison_unavailable,
         )
         boundary_geojson = (
             fetch_boundary_geojson(organisation_code) if geometries else None
