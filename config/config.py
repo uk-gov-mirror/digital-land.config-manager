@@ -73,6 +73,20 @@ class Config:
         "https://raw.githubusercontent.com/digital-land/specification/refs/heads/main/specification/dataset.csv",
     )
 
+    # Sentry error reporting. The DSN is injected as a secret by terraform
+    # (/${stage}/config-manager/sentry_dsn), so Sentry stays off wherever the DSN
+    # isn't set - local dev included, unless you put one in your .env.
+    SENTRY_DSN = os.getenv("SENTRY_DSN")
+    SENTRY_ENABLED = os.getenv("SENTRY_ENABLED", "true").lower() == "true"
+    # Sample rates are kept low - this is a low-traffic internal app and traces are
+    # only for performance work. Errors are always sent in full regardless of these.
+    SENTRY_TRACES_SAMPLE_RATE = float(os.getenv("SENTRY_TRACING_SAMPLE_RATE", "0.01"))
+    SENTRY_PROFILES_SAMPLE_RATE = float(
+        os.getenv("SENTRY_PROFILES_SAMPLE_RATE", "0.01")
+    )
+    SENTRY_DEBUG = os.getenv("SENTRY_DEBUG", "false").lower() == "true"
+    SENTRY_RELEASE = os.getenv("GIT_COMMIT")
+
 
 class DevelopmentConfig(Config):
     DEBUG = True
@@ -100,6 +114,7 @@ class TestConfig(Config):
     AUTHENTICATION_ON = False
     SECRET_KEY = "testing"
     SQLALCHEMY_DATABASE_URI = "sqlite:///:memory:"
+    SENTRY_ENABLED = False
 
 
 def get_request_api_endpoint():

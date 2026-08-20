@@ -4,8 +4,8 @@ Flask app factory class
 """
 
 # import os.path
-# import sentry_sdk
 import logging
+import sentry_sdk
 from flask import Flask
 from flask.cli import load_dotenv
 
@@ -49,6 +49,35 @@ def configure_logging(app):
     app.logger.setLevel(log_level)
 
 
+def register_sentry(app):
+    """
+    Initialise Sentry error reporting, if a DSN has been configured
+    """
+    dsn = app.config.get("SENTRY_DSN")
+
+    if not app.config.get("SENTRY_ENABLED") or not dsn:
+        app.logger.info("Sentry is not enabled - no errors will be reported")
+        return
+
+    sentry_sdk.init(
+        dsn=dsn,
+        environment=app.config.get("ENVIRONMENT"),
+        release=app.config.get("SENTRY_RELEASE"),
+        traces_sample_rate=app.config.get("SENTRY_TRACES_SAMPLE_RATE"),
+        profiles_sample_rate=app.config.get("SENTRY_PROFILES_SAMPLE_RATE"),
+        debug=app.config.get("SENTRY_DEBUG"),
+        enable_logs=True,
+        # Attaches request headers and the signed-in GitHub user to events. This is
+        # an internal, authenticated-only admin tool, so knowing who hit the error
+        # is worth more than the little PII it collects.
+        send_default_pii=True,
+    )
+
+    app.logger.info(
+        "Sentry enabled for environment '%s'", app.config.get("ENVIRONMENT")
+    )
+
+
 def create_app(config_filename):
     """
     App factory function
@@ -59,6 +88,7 @@ def create_app(config_filename):
     app.config["DEBUG"] = True
 
     configure_logging(app)
+    register_sentry(app)
 
     register_blueprints(app)
     register_context_processors(app)
