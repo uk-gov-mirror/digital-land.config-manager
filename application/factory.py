@@ -67,10 +67,10 @@ def register_sentry(app):
         profiles_sample_rate=app.config.get("SENTRY_PROFILES_SAMPLE_RATE"),
         debug=app.config.get("SENTRY_DEBUG"),
         enable_logs=True,
-        # Attaches request headers and the signed-in GitHub user to events. This is
-        # an internal, authenticated-only admin tool, so knowing who hit the error
-        # is worth more than the little PII it collects.
-        send_default_pii=True,
+        # send_default_pii is left off (the SDK default). Turning it on would not
+        # identify the user anyway - Sentry's Flask integration reads the user from
+        # flask_login, which this app doesn't use - but it would attach cookies,
+        # and our signed-cookie session carries a replayable login.
     )
 
     app.logger.info(
