@@ -1,7 +1,7 @@
 import time
 from unittest.mock import Mock, patch
 
-from application.blueprints.datamanager.services.data_access.http import (
+from application.data_access.http import (
     fetch_pages_concurrently,
     get_http_session,
 )
@@ -30,7 +30,7 @@ class TestFetchPagesConcurrently:
         session = Mock()
         session.get.side_effect = slow_get
         with patch(
-            "application.blueprints.datamanager.services.data_access.http.get_http_session",
+            "application.data_access.http.get_http_session",
             return_value=session,
         ):
             result = fetch_pages_concurrently(["/a", "/b", "/c"])
@@ -46,7 +46,7 @@ class TestFetchPagesConcurrently:
         session = Mock()
         session.get.side_effect = get
         with patch(
-            "application.blueprints.datamanager.services.data_access.http.get_http_session",
+            "application.data_access.http.get_http_session",
             return_value=session,
         ):
             result = fetch_pages_concurrently(["/a", "/b", "/c"])
@@ -59,7 +59,7 @@ class TestFetchPagesConcurrently:
         session = Mock()
         session.get.return_value = response
         with patch(
-            "application.blueprints.datamanager.services.data_access.http.get_http_session",
+            "application.data_access.http.get_http_session",
             return_value=session,
         ):
             assert fetch_pages_concurrently(["/a"]) == [None]
@@ -70,7 +70,7 @@ class TestGetHttpSession:
         assert get_http_session() is get_http_session()
 
     def test_pool_is_large_enough_for_the_worker_count(self):
-        from application.blueprints.datamanager.services.data_access import http
+        from application.data_access import http
 
         adapter = get_http_session().get_adapter("https://example.com")
         assert adapter._pool_maxsize >= http.DEFAULT_MAX_WORKERS

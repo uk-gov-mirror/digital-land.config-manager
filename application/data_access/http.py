@@ -2,31 +2,55 @@ import logging
 from concurrent.futures import ThreadPoolExecutor
 
 import requests
+from flask import current_app
 from requests.adapters import HTTPAdapter
 
 logger = logging.getLogger(__name__)
 
-# Kept well under the CDN's 30s origin timeout so one slow page can't eat the budget.
-PAGE_REQUEST_TIMEOUT = 10
+# Fallbacks for when there is no application context to read config from.
 DEFAULT_MAX_WORKERS = 8
+DEFAULT_PAGE_TIMEOUT = 10
 
-# Reused across pages to avoid a TLS handshake each time. pool_maxsize must stay
-# >= the worker count or urllib3 discards connections.
-_session = requests.Session()
-_adapter = HTTPAdapter(pool_connections=4, pool_maxsize=16)
-_session.mount("https://", _adapter)
-_session.mount("http://", _adapter)
+_session = None
+
+
+def _config(key: str, default: int) -> int:
+    try:
+        return current_app.config.get(key, default)
+    except RuntimeError:
+        return default
+
+
+def page_max_workers() -> int:
+    return _config("HTTP_PAGE_MAX_WORKERS", DEFAULT_MAX_WORKERS)
+
+
+def page_timeout() -> int:
+    return _config("HTTP_PAGE_TIMEOUT", DEFAULT_PAGE_TIMEOUT)
 
 
 def get_http_session() -> requests.Session:
-    """Return the process-wide pooled session used for paged fetches."""
+    """
+    The process-wide pooled session used for paged fetches. Reusing connections
+    avoids a TLS handshake per page; the pool has to hold at least one connection
+    per worker or urllib3 discards them.
+    """
+    global _session
+    if _session is None:
+        session = requests.Session()
+        adapter = HTTPAdapter(
+            pool_connections=4, pool_maxsize=max(page_max_workers() * 2, 16)
+        )
+        session.mount("https://", adapter)
+        session.mount("http://", adapter)
+        _session = session
     return _session
 
 
 def fetch_pages_concurrently(
     urls: list,
-    max_workers: int = DEFAULT_MAX_WORKERS,
-    timeout: int = PAGE_REQUEST_TIMEOUT,
+    max_workers: int = None,
+    timeout: int = None,
     headers: dict = None,
 ) -> list:
     """
@@ -41,6 +65,8 @@ def fetch_pages_concurrently(
         return []
 
     session = get_http_session()
+    timeout = timeout if timeout is not None else page_timeout()
+    max_workers = max_workers if max_workers is not None else page_max_workers()
 
     def _get(url):
         try:

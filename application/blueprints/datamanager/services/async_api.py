@@ -8,10 +8,10 @@ from config.config import get_request_api_endpoint
 
 from application.extensions import cache
 
-from .data_access.http import (
-    PAGE_REQUEST_TIMEOUT,
+from application.data_access.http import (
     fetch_pages_concurrently,
     get_http_session,
+    page_timeout,
 )
 from ..utils import REQUESTS_TIMEOUT
 
@@ -38,6 +38,18 @@ class AsyncAPIError(Exception):
         self.status_code = status_code
         self.detail = detail
         super().__init__(message)
+
+
+class ResponseDetailsIncomplete(AsyncAPIError):
+    """
+    Raised when some response-detail pages failed, carrying the rows that did
+    arrive so the caller can still show them. Raising rather than returning the
+    short list keeps the memoize cache empty, so the next request retries.
+    """
+
+    def __init__(self, message, partial=None):
+        super().__init__(message)
+        self.partial = partial or []
 
 
 def submit_request(params: dict) -> str:
@@ -132,6 +144,8 @@ def fetch_response_details(
     The API reports the row count in an X-Pagination-Total-Results header, so once
     the first page is in the rest are fetched in parallel. Falls back to sequential
     paging when that header is missing.
+
+    Raises ResponseDetailsIncomplete, carrying the rows it did get, if any page fails.
     """
     logger.info(
         f"Fetching response details for request_id: {request_id}, "
@@ -144,7 +158,7 @@ def fetch_response_details(
         response = get_http_session().get(
             url,
             params={"offset": start_offset, "limit": first_limit},
-            timeout=PAGE_REQUEST_TIMEOUT,
+            timeout=page_timeout(),
         )
         response.raise_for_status()
         first_batch = response.json() or []
@@ -170,6 +184,7 @@ def fetch_response_details(
         wanted = min(wanted, max_rows)
 
     all_details = list(first_batch)
+    failed_offsets = []
     offsets = range(start_offset + len(first_batch), start_offset + wanted, limit)
     if offsets and first_batch:
         urls = [
@@ -178,14 +193,18 @@ def fetch_response_details(
         ]
         for offset, page in zip(offsets, fetch_pages_concurrently(urls)):
             if page is None:
-                logger.error(
-                    f"Response details page at offset {offset} failed for "
-                    f"{request_id} - returned rows are incomplete"
-                )
+                failed_offsets.append(offset)
                 continue
             all_details.extend(page)
 
     all_details = all_details[:wanted]
+    if failed_offsets:
+        raise ResponseDetailsIncomplete(
+            f"Response details pages at offsets {failed_offsets} failed for "
+            f"{request_id} - got {len(all_details)} of {wanted} rows",
+            partial=all_details,
+        )
+
     logger.info(f"Total response details fetched: {len(all_details)}")
     return all_details
 
@@ -210,6 +229,9 @@ def _fetch_response_details_sequentially(
         fetch_limit = (
             min(limit, max_rows - len(all_details)) if max_rows is not None else limit
         )
+        # Reset per iteration: the handler below reports on it, and a transport
+        # failure leaves it unassigned.
+        response = None
         try:
             url = _response_details_url(request_id)
             params = {"offset": offset, "limit": fetch_limit}

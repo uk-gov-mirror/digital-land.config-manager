@@ -1,7 +1,10 @@
 from unittest.mock import MagicMock, patch
 
+import pytest
+
 from application.blueprints.datamanager.services.planning_data import (
     ENTITY_PAGE_SIZE,
+    PlatformEntitiesIncomplete,
     get_entities_for_organisation_and_dataset,
     get_entity_count_for_organisation_and_dataset,
 )
@@ -61,18 +64,55 @@ class TestGetEntitiesForOrganisationAndDataset:
         urls = fetch_pages.call_args[0][0]
         assert [u.split("offset=")[1] for u in urls] == ["0", str(ENTITY_PAGE_SIZE)]
 
-    def test_failed_page_is_skipped_without_losing_the_others(self, app, caplog):
+    def test_failed_page_raises_rather_than_returning_a_partial_list(self, app):
+        # A partial list would report the missing platform entities as new.
         pages = [{"entities": _entities(0, ENTITY_PAGE_SIZE)}, None]
         with app.app_context():
             with patch(
                 f"{PLANNING_DATA_MODULE}.fetch_pages_concurrently", return_value=pages
             ):
+                with pytest.raises(PlatformEntitiesIncomplete):
+                    get_entities_for_organisation_and_dataset(
+                        12, "holed-dataset", total=ENTITY_PAGE_SIZE + 10
+                    )
+
+    def test_partial_result_is_not_cached_so_the_next_call_retries(self, app):
+        failing = [{"entities": _entities(0, ENTITY_PAGE_SIZE)}, None]
+        whole = [
+            {"entities": _entities(0, ENTITY_PAGE_SIZE)},
+            {"entities": _entities(ENTITY_PAGE_SIZE, 10)},
+        ]
+        total = ENTITY_PAGE_SIZE + 10
+        with app.app_context():
+            with patch(
+                f"{PLANNING_DATA_MODULE}.fetch_pages_concurrently", return_value=failing
+            ):
+                with pytest.raises(PlatformEntitiesIncomplete):
+                    get_entities_for_organisation_and_dataset(15, "flaky", total=total)
+
+            # Same memoize key: the failure must not have poisoned the cache.
+            with patch(
+                f"{PLANNING_DATA_MODULE}.fetch_pages_concurrently", return_value=whole
+            ):
                 result = get_entities_for_organisation_and_dataset(
-                    12, "holed-dataset", total=ENTITY_PAGE_SIZE + 10
+                    15, "flaky", total=total
                 )
 
-        assert len(result) == ENTITY_PAGE_SIZE
-        assert f"offset {ENTITY_PAGE_SIZE} failed" in caplog.text
+        assert len(result) == total
+
+    def test_sequential_paging_raises_when_a_page_fails(self, app):
+        responses = [
+            _entities_response(
+                _entities(0, ENTITY_PAGE_SIZE), next_url="/entity.json?p=2"
+            ),
+            Exception("connection reset"),
+        ]
+        with app.app_context():
+            with patch(f"{PLANNING_DATA_MODULE}.requests.get", side_effect=responses):
+                with pytest.raises(PlatformEntitiesIncomplete):
+                    get_entities_for_organisation_and_dataset(
+                        16, "sequential-holed", total=None
+                    )
 
     def test_zero_total_fetches_nothing(self, app):
         with app.app_context():

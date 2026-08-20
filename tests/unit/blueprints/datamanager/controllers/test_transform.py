@@ -5,9 +5,13 @@ from application.utils import compute_hash
 from application.blueprints.datamanager.controllers.transform import (
     _dedup_candidate_form_value,
     _dedup_dynamic_columns,
+    _fetch_platform_entities,
     _prepare_duplicate_candidates,
     _resolve_existing_endpoints,
     _show_dedup_tab,
+)
+from application.blueprints.datamanager.services.planning_data import (
+    PlatformEntitiesIncomplete,
 )
 
 TRANSFORM_MODULE = "application.blueprints.datamanager.controllers.transform"
@@ -283,3 +287,51 @@ def test_show_dedup_tab_uses_typology_but_keeps_conservation_area_spatial_flow()
     assert _show_dedup_tab(True, "conservation-area", "geography")
     assert not _show_dedup_tab(True, "article-4-direction-area", "geography")
     assert not _show_dedup_tab(False, "tree-preservation-order", "legal-instrument")
+
+
+class TestFetchPlatformEntitiesFailure:
+    def test_incomplete_platform_fetch_reports_failure_and_no_entities(self, app):
+        # A partial platform list would report existing entities as new, so the
+        # controller must get nothing back plus a flag to suppress the comparison.
+        with app.app_context():
+            with patch(f"{TRANSFORM_MODULE}.get_org_entity", return_value=400):
+                with patch(
+                    f"{TRANSFORM_MODULE}.get_entity_count_for_organisation_and_dataset",
+                    return_value=800,
+                ):
+                    with patch(
+                        f"{TRANSFORM_MODULE}.get_entities_for_organisation_and_dataset",
+                        side_effect=PlatformEntitiesIncomplete("page 2 failed"),
+                    ):
+                        (
+                            entities,
+                            too_large,
+                            count,
+                            fetch_failed,
+                        ) = _fetch_platform_entities("local-authority:ABC", "tree")
+
+        assert entities == []
+        assert fetch_failed is True
+        assert too_large is False
+        assert count == 800
+
+    def test_successful_fetch_reports_no_failure(self, app):
+        with app.app_context():
+            with patch(f"{TRANSFORM_MODULE}.get_org_entity", return_value=400):
+                with patch(
+                    f"{TRANSFORM_MODULE}.get_entity_count_for_organisation_and_dataset",
+                    return_value=2,
+                ):
+                    with patch(
+                        f"{TRANSFORM_MODULE}.get_entities_for_organisation_and_dataset",
+                        return_value=[{"entity": 1}, {"entity": 2}],
+                    ):
+                        (
+                            entities,
+                            too_large,
+                            count,
+                            fetch_failed,
+                        ) = _fetch_platform_entities("local-authority:ABC", "tree")
+
+        assert len(entities) == 2
+        assert fetch_failed is False

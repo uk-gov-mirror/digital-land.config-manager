@@ -3,6 +3,12 @@ from unittest.mock import patch
 
 import responses as rsps
 
+from application.blueprints.datamanager.services.async_api import (
+    ResponseDetailsIncomplete,
+)
+from application.blueprints.datamanager.services.planning_data import (
+    PlatformEntitiesIncomplete,
+)
 from application.blueprints.datamanager.controllers.transform import (
     _build_geometry_features,
     _build_entities_data,
@@ -1154,3 +1160,76 @@ class TestCheckTransformPostRetireUnretire:
             meta = db.session.get(RequestMeta, "req-diff")
             assert json.loads(meta.endpoints_to_retire) == ["hash-active"]
             assert json.loads(meta.endpoints_to_unretire) == ["hash-retired"]
+
+
+class TestCheckTransformFetchFailures:
+    """The page still renders, but never shows a comparison built on partial data."""
+
+    @rsps.activate
+    def test_platform_fetch_failure_warns_and_suppresses_comparison(self, client):
+        rsps.add(
+            rsps.GET,
+            f"{ASYNC_BASE}/platform-fail-id",
+            json={**COMPLETED_TRANSFORM_REQUEST, "id": "platform-fail-id"},
+            status=200,
+        )
+        _add_response_details(
+            f"{ASYNC_BASE}/platform-fail-id/response-details", RESPONSE_DETAILS
+        )
+        with patch(
+            "application.blueprints.datamanager.controllers.transform.get_organisation_name",
+            return_value="Test Org",
+        ), patch(
+            "application.blueprints.datamanager.controllers.transform.get_dataset_name",
+            return_value="Conservation Area",
+        ), patch(
+            "application.blueprints.datamanager.controllers.transform.get_org_entity",
+            return_value=400,
+        ), patch(
+            "application.blueprints.datamanager.controllers"
+            ".transform.get_entity_count_for_organisation_and_dataset",
+            return_value=900,
+        ), patch(
+            "application.blueprints.datamanager.controllers"
+            ".transform.get_entities_for_organisation_and_dataset",
+            side_effect=PlatformEntitiesIncomplete("page 2 failed"),
+        ):
+            response = client.get("/datamanager/check-transform/platform-fail-id")
+
+        assert response.status_code == 200
+        assert b"platform data could not be fetched" in response.data
+        assert b"Reload to try again" in response.data
+        # The comparison and its summary counts must not render.
+        assert b"app-stat-box" not in response.data
+
+    @rsps.activate
+    def test_incomplete_details_warns_and_still_shows_the_rows_it_has(self, client):
+        rsps.add(
+            rsps.GET,
+            f"{ASYNC_BASE}/details-fail-id",
+            json={**COMPLETED_TRANSFORM_REQUEST, "id": "details-fail-id"},
+            status=200,
+        )
+        with patch(
+            "application.blueprints.datamanager.controllers.transform.get_organisation_name",
+            return_value="Test Org",
+        ), patch(
+            "application.blueprints.datamanager.controllers.transform.get_dataset_name",
+            return_value="Conservation Area",
+        ), patch(
+            "application.blueprints.datamanager.controllers.transform.get_org_entity",
+            return_value=None,
+        ), patch(
+            "application.blueprints.datamanager.controllers.transform.fetch_response_details",
+            side_effect=ResponseDetailsIncomplete(
+                "page 3 failed", partial=RESPONSE_DETAILS
+            ),
+        ):
+            response = client.get("/datamanager/check-transform/details-fail-id")
+
+        assert response.status_code == 200
+        assert b"transformed data could not be fetched" in response.data
+        assert b"Reload to try again" in response.data
+        assert b"app-stat-box" not in response.data
+        # The partial rows carried on the exception are still rendered.
+        assert b"Area A" in response.data

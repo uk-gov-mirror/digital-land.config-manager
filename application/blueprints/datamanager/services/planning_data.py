@@ -5,10 +5,18 @@ from flask import current_app
 
 from application.extensions import cache
 
-from .data_access.http import fetch_pages_concurrently
+from application.data_access.http import fetch_pages_concurrently
 from ..utils import REQUESTS_TIMEOUT
 
 logger = logging.getLogger(__name__)
+
+
+class PlatformEntitiesIncomplete(Exception):
+    """
+    Raised when any entity page failed. A partial list is worse than none, since the
+    entities missing from it get reported as new. Raising also leaves the memoize
+    cache empty, so the next request retries instead of serving the gap.
+    """
 
 
 def get_entity_count_for_organisation_and_dataset(
@@ -64,6 +72,8 @@ def get_entities_for_organisation_and_dataset(
 
     When the caller already knows the total it is passed in, letting every page be
     fetched in parallel. Without it, falls back to walking links.next one page at a time.
+
+    Raises PlatformEntitiesIncomplete if any page fails.
     """
     if total is None:
         return _get_entities_sequentially(organisation_entity, dataset)
@@ -75,11 +85,10 @@ def get_entities_for_organisation_and_dataset(
     entities = []
     for offset, page in zip(offsets, fetch_pages_concurrently(urls)):
         if page is None:
-            logger.error(
+            raise PlatformEntitiesIncomplete(
                 f"Entity page at offset {offset} failed for organisation_entity="
-                f"{organisation_entity} dataset={dataset} - entities are incomplete"
+                f"{organisation_entity} dataset={dataset}"
             )
-            continue
         entities.extend(page.get("entities", []))
 
     logger.info(
@@ -90,7 +99,11 @@ def get_entities_for_organisation_and_dataset(
 
 
 def _get_entities_sequentially(organisation_entity: int | str, dataset: str) -> list:
-    """Walk links.next one page at a time, for when the total isn't known up front."""
+    """
+    Walk links.next one page at a time, for when the total isn't known up front.
+
+    Raises PlatformEntitiesIncomplete if a page fails part way through.
+    """
     planning_url = current_app.config.get("PLANNING_BASE_URL")
     url = _org_entities_url(organisation_entity, dataset)
 
@@ -103,12 +116,10 @@ def _get_entities_sequentially(organisation_entity: int | str, dataset: str) -> 
             response.raise_for_status()
             data = response.json()
         except Exception as e:
-            logger.error(
+            raise PlatformEntitiesIncomplete(
                 f"Failed to fetch entities (page {page}) for organisation_entity="
-                f"{organisation_entity} dataset={dataset}: {e}",
-                exc_info=True,
-            )
-            break
+                f"{organisation_entity} dataset={dataset}: {e}"
+            ) from e
 
         entities.extend(data.get("entities", []))
 

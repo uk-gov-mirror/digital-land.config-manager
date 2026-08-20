@@ -9,7 +9,7 @@ from shapely.geometry import mapping
 
 from . import ControllerError
 from application.utils import compute_hash
-from ..services.async_api import fetch_response_details
+from ..services.async_api import ResponseDetailsIncomplete, fetch_response_details
 from ..services.dataset import get_dataset_name, get_dataset_typology
 from ..services.duplicates import REDIRECT_STATUSES
 from ..services.organisation import get_org_entity, get_organisation_name
@@ -19,6 +19,7 @@ from ..services.endpoint import (
     get_endpoint_info_for_hashes,
 )
 from ..services.planning_data import (
+    PlatformEntitiesIncomplete,
     get_entities_for_organisation_and_dataset,
     get_entity_count_for_organisation_and_dataset,
 )
@@ -572,6 +573,11 @@ def _resolve_existing_endpoints(
 
 
 def _fetch_platform_entities(organisation_code: str, dataset_id: str) -> tuple:
+    """
+    Returns (entities, too_large, count, fetch_failed). On fetch_failed the entity
+    list is empty and the comparison must be suppressed rather than run against a
+    partial platform picture, which would report existing entities as new.
+    """
     org_entity = get_org_entity(organisation_code)
     existing_count = (
         get_entity_count_for_organisation_and_dataset(org_entity, dataset_id)
@@ -580,14 +586,19 @@ def _fetch_platform_entities(organisation_code: str, dataset_id: str) -> tuple:
     )
     # A None count means the count call failed, not that there are no entities
     platform_too_large = (existing_count or 0) > _PLATFORM_ENTITY_LIMIT
-    platform_entities = (
-        get_entities_for_organisation_and_dataset(
-            org_entity, dataset_id, total=existing_count
+    try:
+        platform_entities = (
+            get_entities_for_organisation_and_dataset(
+                org_entity, dataset_id, total=existing_count
+            )
+            if org_entity is not None and not platform_too_large
+            else []
         )
-        if org_entity is not None and not platform_too_large
-        else []
-    )
-    return platform_entities, platform_too_large, existing_count or 0
+    except PlatformEntitiesIncomplete as e:
+        logger.error("Platform entities incomplete for %s: %s", organisation_code, e)
+        return [], platform_too_large, existing_count or 0, True
+
+    return platform_entities, platform_too_large, existing_count or 0, False
 
 
 def _paginate_entity_data(
@@ -919,10 +930,25 @@ def handle_check_transform(
         )
 
     # Fetch the response details and platform entities for the organisation and dataset.
-    all_resp_details = fetch_response_details(request_id)
-    platform_entities, platform_too_large, existing_count = _fetch_platform_entities(
-        organisation_code, dataset_id
-    )
+    details_incomplete = False
+    try:
+        all_resp_details = fetch_response_details(request_id)
+    except ResponseDetailsIncomplete as e:
+        logger.error("Response details incomplete for %s: %s", request_id, e)
+        all_resp_details = e.partial
+        details_incomplete = True
+
+    (
+        platform_entities,
+        platform_too_large,
+        existing_count,
+        platform_fetch_failed,
+    ) = _fetch_platform_entities(organisation_code, dataset_id)
+
+    # The comparison needs both sides complete. Missing platform entities would show
+    # resource entities as new; missing resource rows would show platform entities as
+    # platform-only. Either way, suppress it rather than render something wrong.
+    comparison_unavailable = platform_fetch_failed or details_incomplete
 
     response_payload = req.get("response") or {}
     response_data = response_payload.get("data") or {}
@@ -1013,6 +1039,9 @@ def handle_check_transform(
         pipelines_append_required=pipelines_append_required,
         entities_data=entities_data,
         platform_too_large=platform_too_large,
+        comparison_unavailable=comparison_unavailable,
+        details_incomplete=details_incomplete,
+        platform_fetch_failed=platform_fetch_failed,
         existing_count=existing_count,
         page_number=page_number,
         has_next_page=has_next_page,

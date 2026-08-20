@@ -5,6 +5,7 @@ import pytest
 from application.blueprints.datamanager.services.async_api import (
     fetch_response_details,
     AsyncAPIError,
+    ResponseDetailsIncomplete,
     fetch_request,
     submit_request,
 )
@@ -151,17 +152,36 @@ class TestFetchResponseDetails:
         assert len(result) == 900
         sequential.assert_called_once()
 
-    def test_failed_page_is_skipped_without_reordering_the_rest(self, app, caplog):
+    def test_failed_page_raises_and_carries_the_rows_it_did_get(self, app):
         with self._patch_first_page(_page_response(_rows(0, 500), total=1500)), patch(
             "application.blueprints.datamanager.services.async_api.fetch_pages_concurrently",
             return_value=[None, _rows(1000, 500)],
         ):
-            result = fetch_response_details("holed")
+            with pytest.raises(ResponseDetailsIncomplete) as excinfo:
+                fetch_response_details("holed")
 
-        assert [row["entry_number"] for row in result] == (
+        # The partial rows keep offset order so the controller can still show them.
+        assert [row["entry_number"] for row in excinfo.value.partial] == (
             list(range(500)) + list(range(1000, 1500))
         )
-        assert "offset 500 failed" in caplog.text
+
+    def test_partial_result_is_not_cached_so_the_next_call_retries(self, app):
+        first_page = _page_response(_rows(0, 500), total=1000)
+        with self._patch_first_page(first_page), patch(
+            "application.blueprints.datamanager.services.async_api.fetch_pages_concurrently",
+            return_value=[None],
+        ):
+            with pytest.raises(ResponseDetailsIncomplete):
+                fetch_response_details("flaky-request")
+
+        # Same memoize key: the failure must not have poisoned the cache.
+        with self._patch_first_page(first_page), patch(
+            "application.blueprints.datamanager.services.async_api.fetch_pages_concurrently",
+            return_value=[_rows(500, 500)],
+        ):
+            result = fetch_response_details("flaky-request")
+
+        assert [row["entry_number"] for row in result] == list(range(1000))
 
     def test_returns_empty_when_the_first_page_fails(self, app):
         session = Mock()
@@ -171,3 +191,13 @@ class TestFetchResponseDetails:
             return_value=session,
         ):
             assert fetch_response_details("first-page-fails") == []
+
+    def test_transport_failure_during_sequential_fallback_is_handled(self, app):
+        # Headerless first page sends us down the sequential path; the transport
+        # then fails before any response is bound, which used to raise
+        # UnboundLocalError out of the error handler itself.
+        with self._patch_first_page(_page_response(_rows(0, 10))), patch(
+            "application.blueprints.datamanager.services.async_api.requests.get",
+            side_effect=Exception("connection reset"),
+        ):
+            assert fetch_response_details("sequential-transport-failure") == []
