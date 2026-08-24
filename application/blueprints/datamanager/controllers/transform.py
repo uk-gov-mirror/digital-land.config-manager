@@ -3,13 +3,13 @@ import logging
 import re
 
 import requests
-from flask import current_app, render_template, request as flask_request
+from flask import current_app, render_template, request as flask_request, session
 from shapely import wkt
 from shapely.geometry import mapping
 
 from . import ControllerError
 from application.utils import compute_hash
-from ..services.async_api import fetch_response_details
+from ..services.async_api import ResponseDetailsIncomplete, fetch_response_details
 from ..services.dataset import get_dataset_name, get_dataset_typology
 from ..services.duplicates import REDIRECT_STATUSES
 from ..services.organisation import get_org_entity, get_organisation_name
@@ -19,6 +19,7 @@ from ..services.endpoint import (
     get_endpoint_info_for_hashes,
 )
 from ..services.planning_data import (
+    PlatformEntitiesIncomplete,
     get_entities_for_organisation_and_dataset,
     get_entity_count_for_organisation_and_dataset,
 )
@@ -81,7 +82,7 @@ _DUPLICATE_FIXED_FIELDS = {
     "organisation_entity",
 }
 _ROWS_PER_PAGE = 500
-_PLATFORM_ENTITY_LIMIT = 10000
+_PLATFORM_ENTITY_LIMIT = 15000
 _GEO_FIELDS = {"geometry", "point"}
 _DATE_PREFIX_RE = re.compile(r"^(\d{4}-\d{2}-\d{2})[T ]")
 _CHANGED_VALUE_MAX_LEN = 200
@@ -572,19 +573,37 @@ def _resolve_existing_endpoints(
 
 
 def _fetch_platform_entities(organisation_code: str, dataset_id: str) -> tuple:
+    """
+    Returns (entities, too_large, count, fetch_failed). On fetch_failed the entity
+    list is empty and the comparison must be suppressed rather than run against a
+    partial platform picture, which would report existing entities as new.
+    """
     org_entity = get_org_entity(organisation_code)
     existing_count = (
         get_entity_count_for_organisation_and_dataset(org_entity, dataset_id)
         if org_entity is not None
         else 0
     )
+    if org_entity is not None and existing_count is None:
+        # Without a count the too-large guard can't be evaluated and paging would
+        # run unbounded inside the request.
+        logger.error("Entity count unavailable for %s", organisation_code)
+        return [], False, 0, True
+
     platform_too_large = existing_count > _PLATFORM_ENTITY_LIMIT
-    platform_entities = (
-        get_entities_for_organisation_and_dataset(org_entity, dataset_id)
-        if org_entity is not None and not platform_too_large
-        else []
-    )
-    return platform_entities, platform_too_large, existing_count
+    try:
+        platform_entities = (
+            get_entities_for_organisation_and_dataset(
+                org_entity, dataset_id, total=existing_count
+            )
+            if org_entity is not None and not platform_too_large
+            else []
+        )
+    except PlatformEntitiesIncomplete as e:
+        logger.error("Platform entities incomplete for %s: %s", organisation_code, e)
+        return [], platform_too_large, existing_count, True
+
+    return platform_entities, platform_too_large, existing_count, False
 
 
 def _paginate_entity_data(
@@ -717,12 +736,19 @@ def _point_feature(shapely_geom, point_wkt, properties: dict) -> dict:
 
 
 def _build_geometry_features(
-    platform_entities: list, all_resp_details: list, dataset_id: str
+    platform_entities: list,
+    all_resp_details: list,
+    dataset_id: str,
+    compare: bool = True,
 ) -> tuple:
     """Return (polygon_features, point_features).
 
     polygon_features keep the original geometry for the boundary layers;
     point_features carry one representative point per entity for clustering.
+
+    With compare=False only the resource's own geometry is returned, untagged. The
+    map falls back to one neutral group when no feature carries a status, so an
+    unusable comparison shows geometry without miscategorising it.
     """
     platform_by_id = {
         _normalise_entity_id(str(e.get("entity", ""))): e
@@ -741,7 +767,7 @@ def _build_geometry_features(
     features = []
     points = []
 
-    for entity in platform_entities:
+    for entity in platform_entities if compare else []:
         entity_id = _normalise_entity_id(str(entity.get("entity", "")))
         if entity_id in resource_entity_ids:
             continue
@@ -790,7 +816,9 @@ def _build_geometry_features(
         shape_wkt = (geom_fact or {}).get("value") or (point_fact or {}).get("value")
         if not shape_wkt:
             continue
-        if entity_id in platform_entity_ids:
+        if not compare:
+            status = None
+        elif entity_id in platform_entity_ids:
             resource_fields = {
                 f.get("field", ""): f.get("value", "")
                 for f in transformed_row
@@ -813,8 +841,9 @@ def _build_geometry_features(
                     or f"Entry {item.get('entry_number')}"
                 ),
                 "name": converted_row.get("name", ""),
-                "status": status,
             }
+            if status is not None:
+                properties["status"] = status
             features.append(
                 {"type": "Feature", "geometry": mapping(shp), "properties": properties}
             )
@@ -916,10 +945,26 @@ def handle_check_transform(
         )
 
     # Fetch the response details and platform entities for the organisation and dataset.
-    all_resp_details = fetch_response_details(request_id)
-    platform_entities, platform_too_large, existing_count = _fetch_platform_entities(
-        organisation_code, dataset_id
-    )
+    details_incomplete = False
+    try:
+        all_resp_details = fetch_response_details(request_id)
+    except ResponseDetailsIncomplete as e:
+        logger.error("Response details incomplete for %s: %s", request_id, e)
+        all_resp_details = e.partial
+        details_incomplete = True
+
+    (
+        platform_entities,
+        platform_too_large,
+        existing_count,
+        platform_fetch_failed,
+    ) = _fetch_platform_entities(organisation_code, dataset_id)
+
+    # The comparison needs both sides complete. Missing platform entities would show
+    # resource entities as new; missing resource rows would show platform entities as
+    # platform-only. Either way, suppress it rather than render something wrong.
+    comparison_unavailable = platform_fetch_failed or details_incomplete
+    can_override = bool((session.get("user") or {}).get("is_admin"))
 
     response_payload = req.get("response") or {}
     response_data = response_payload.get("data") or {}
@@ -983,7 +1028,10 @@ def handle_check_transform(
     # and any new or updated resource entities with geometry.
     if dataset_typology == "geography":
         geometries, geometry_points = _build_geometry_features(
-            platform_entities, all_resp_details, dataset_id
+            platform_entities,
+            all_resp_details,
+            dataset_id,
+            compare=not comparison_unavailable,
         )
         boundary_geojson = (
             fetch_boundary_geojson(organisation_code) if geometries else None
@@ -1010,6 +1058,10 @@ def handle_check_transform(
         pipelines_append_required=pipelines_append_required,
         entities_data=entities_data,
         platform_too_large=platform_too_large,
+        comparison_unavailable=comparison_unavailable,
+        can_override=can_override,
+        details_incomplete=details_incomplete,
+        platform_fetch_failed=platform_fetch_failed,
         existing_count=existing_count,
         page_number=page_number,
         has_next_page=has_next_page,

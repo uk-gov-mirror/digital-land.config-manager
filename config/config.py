@@ -47,6 +47,12 @@ class Config:
     CACHE_TYPE = "SimpleCache"
     CACHE_DEFAULT_TIMEOUT = 300
 
+    # Paged API fetches (response details, platform entities) run their pages in
+    # parallel. Timeout is per page and must stay well under the CDN's 30s origin
+    # timeout so one slow page can't use up the whole page budget.
+    HTTP_PAGE_MAX_WORKERS = int(os.getenv("HTTP_PAGE_MAX_WORKERS", "8"))
+    HTTP_PAGE_TIMEOUT = int(os.getenv("HTTP_PAGE_TIMEOUT", "10"))
+
     # Planning Data base URL
     PLANNING_BASE_URL = os.getenv("PLANNING_URL", "https://www.planning.data.gov.uk")
 

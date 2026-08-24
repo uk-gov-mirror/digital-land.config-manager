@@ -3,6 +3,12 @@ from unittest.mock import patch
 
 import responses as rsps
 
+from application.blueprints.datamanager.services.async_api import (
+    ResponseDetailsIncomplete,
+)
+from application.blueprints.datamanager.services.planning_data import (
+    PlatformEntitiesIncomplete,
+)
 from application.blueprints.datamanager.controllers.transform import (
     _build_geometry_features,
     _build_entities_data,
@@ -27,6 +33,18 @@ COMPLETED_TRANSFORM_REQUEST = {
         }
     },
 }
+
+
+def _add_response_details(url, details):
+    """The async API reports the row count in a header, so one page is enough."""
+    rsps.add(
+        rsps.GET,
+        url,
+        json=details,
+        status=200,
+        headers={"X-Pagination-Total-Results": str(len(details))},
+    )
+
 
 RESPONSE_DETAILS = [
     {
@@ -282,8 +300,7 @@ class TestCheckTransformRoute:
             json=COMPLETED_TRANSFORM_REQUEST,
             status=200,
         )
-        rsps.add(rsps.GET, RESPONSE_DETAILS_URL, json=RESPONSE_DETAILS, status=200)
-        rsps.add(rsps.GET, RESPONSE_DETAILS_URL, json=[], status=200)
+        _add_response_details(RESPONSE_DETAILS_URL, RESPONSE_DETAILS)
         with patch(
             "application.blueprints.datamanager.controllers.transform.get_organisation_name",
             return_value="Test Org",
@@ -308,8 +325,7 @@ class TestCheckTransformRoute:
             json=COMPLETED_TRANSFORM_REQUEST,
             status=200,
         )
-        rsps.add(rsps.GET, RESPONSE_DETAILS_URL, json=RESPONSE_DETAILS, status=200)
-        rsps.add(rsps.GET, RESPONSE_DETAILS_URL, json=[], status=200)
+        _add_response_details(RESPONSE_DETAILS_URL, RESPONSE_DETAILS)
         with patch(
             "application.blueprints.datamanager.controllers.transform.get_organisation_name",
             return_value="Test Org",
@@ -333,8 +349,7 @@ class TestCheckTransformRoute:
             json=COMPLETED_TRANSFORM_REQUEST,
             status=200,
         )
-        rsps.add(rsps.GET, RESPONSE_DETAILS_URL, json=RESPONSE_DETAILS, status=200)
-        rsps.add(rsps.GET, RESPONSE_DETAILS_URL, json=[], status=200)
+        _add_response_details(RESPONSE_DETAILS_URL, RESPONSE_DETAILS)
         # Different name on the platform → a genuine change → orange "changed" row.
         platform_entities = [{"entity": 100, "name": "Old Area A"}]
         with patch(
@@ -351,6 +366,10 @@ class TestCheckTransformRoute:
                 ):
                     with patch(
                         "application.blueprints.datamanager.controllers"
+                        ".transform.get_entity_count_for_organisation_and_dataset",
+                        return_value=len(platform_entities),
+                    ), patch(
+                        "application.blueprints.datamanager.controllers"
                         ".transform.get_entities_for_organisation_and_dataset",
                         return_value=platform_entities,
                     ):
@@ -365,8 +384,7 @@ class TestCheckTransformRoute:
             json=COMPLETED_TRANSFORM_REQUEST,
             status=200,
         )
-        rsps.add(rsps.GET, RESPONSE_DETAILS_URL, json=RESPONSE_DETAILS, status=200)
-        rsps.add(rsps.GET, RESPONSE_DETAILS_URL, json=[], status=200)
+        _add_response_details(RESPONSE_DETAILS_URL, RESPONSE_DETAILS)
         with patch(
             "application.blueprints.datamanager.controllers.transform.get_organisation_name",
             return_value="Test Org",
@@ -393,8 +411,7 @@ class TestCheckTransformRoute:
             json=COMPLETED_TRANSFORM_REQUEST,
             status=200,
         )
-        rsps.add(rsps.GET, RESPONSE_DETAILS_URL, json=RESPONSE_DETAILS, status=200)
-        rsps.add(rsps.GET, RESPONSE_DETAILS_URL, json=[], status=200)
+        _add_response_details(RESPONSE_DETAILS_URL, RESPONSE_DETAILS)
         platform_entities = [{"entity": 100, "name": "Old Name"}]
         with patch(
             "application.blueprints.datamanager.controllers.transform.get_organisation_name",
@@ -409,6 +426,10 @@ class TestCheckTransformRoute:
                     return_value=400,
                 ):
                     with patch(
+                        "application.blueprints.datamanager.controllers"
+                        ".transform.get_entity_count_for_organisation_and_dataset",
+                        return_value=len(platform_entities),
+                    ), patch(
                         "application.blueprints.datamanager.controllers"
                         ".transform.get_entities_for_organisation_and_dataset",
                         return_value=platform_entities,
@@ -442,8 +463,7 @@ class TestCheckTransformRoute:
             status=200,
         )
         geo_details_url = f"{ASYNC_BASE}/geo-test-id/response-details"
-        rsps.add(rsps.GET, geo_details_url, json=details, status=200)
-        rsps.add(rsps.GET, geo_details_url, json=[], status=200)
+        _add_response_details(geo_details_url, details)
         with patch(
             "application.blueprints.datamanager.controllers.transform.get_organisation_name",
             return_value="Test Org",
@@ -479,8 +499,7 @@ class TestCheckTransformRoute:
             },
         }
         rsps.add(rsps.GET, f"{ASYNC_BASE}/test-id", json=request_json, status=200)
-        rsps.add(rsps.GET, RESPONSE_DETAILS_URL, json=RESPONSE_DETAILS, status=200)
-        rsps.add(rsps.GET, RESPONSE_DETAILS_URL, json=[], status=200)
+        _add_response_details(RESPONSE_DETAILS_URL, RESPONSE_DETAILS)
         with patch(
             "application.blueprints.datamanager.controllers.transform.get_organisation_name",
             return_value="Test Org",
@@ -517,8 +536,7 @@ class TestCheckTransformRoute:
             json=COMPLETED_TRANSFORM_REQUEST,
             status=200,
         )
-        rsps.add(rsps.GET, RESPONSE_DETAILS_URL, json=RESPONSE_DETAILS, status=200)
-        rsps.add(rsps.GET, RESPONSE_DETAILS_URL, json=[], status=200)
+        _add_response_details(RESPONSE_DETAILS_URL, RESPONSE_DETAILS)
         with patch(
             "application.blueprints.datamanager.controllers.transform.get_organisation_name",
             return_value="Test Org",
@@ -1150,3 +1168,130 @@ class TestCheckTransformPostRetireUnretire:
             meta = db.session.get(RequestMeta, "req-diff")
             assert json.loads(meta.endpoints_to_retire) == ["hash-active"]
             assert json.loads(meta.endpoints_to_unretire) == ["hash-retired"]
+
+
+class TestCheckTransformFetchFailures:
+    """The page still renders, but never shows a comparison built on partial data."""
+
+    @rsps.activate
+    def test_platform_fetch_failure_warns_and_suppresses_comparison(self, client):
+        rsps.add(
+            rsps.GET,
+            f"{ASYNC_BASE}/platform-fail-id",
+            json={**COMPLETED_TRANSFORM_REQUEST, "id": "platform-fail-id"},
+            status=200,
+        )
+        _add_response_details(
+            f"{ASYNC_BASE}/platform-fail-id/response-details", RESPONSE_DETAILS
+        )
+        with patch(
+            "application.blueprints.datamanager.controllers.transform.get_organisation_name",
+            return_value="Test Org",
+        ), patch(
+            "application.blueprints.datamanager.controllers.transform.get_dataset_name",
+            return_value="Conservation Area",
+        ), patch(
+            "application.blueprints.datamanager.controllers.transform.get_org_entity",
+            return_value=400,
+        ), patch(
+            "application.blueprints.datamanager.controllers"
+            ".transform.get_entity_count_for_organisation_and_dataset",
+            return_value=900,
+        ), patch(
+            "application.blueprints.datamanager.controllers"
+            ".transform.get_entities_for_organisation_and_dataset",
+            side_effect=PlatformEntitiesIncomplete("page 2 failed"),
+        ):
+            response = client.get("/datamanager/check-transform/platform-fail-id")
+
+        assert response.status_code == 200
+        assert b"platform data could not be fetched" in response.data
+        assert b"Reload to try again" in response.data
+        # The comparison and its summary counts must not render.
+        assert b"app-stat-box" not in response.data
+
+    @rsps.activate
+    def test_incomplete_details_warns_and_still_shows_the_rows_it_has(self, client):
+        rsps.add(
+            rsps.GET,
+            f"{ASYNC_BASE}/details-fail-id",
+            json={**COMPLETED_TRANSFORM_REQUEST, "id": "details-fail-id"},
+            status=200,
+        )
+        with patch(
+            "application.blueprints.datamanager.controllers.transform.get_organisation_name",
+            return_value="Test Org",
+        ), patch(
+            "application.blueprints.datamanager.controllers.transform.get_dataset_name",
+            return_value="Conservation Area",
+        ), patch(
+            "application.blueprints.datamanager.controllers.transform.get_org_entity",
+            return_value=None,
+        ), patch(
+            "application.blueprints.datamanager.controllers.transform.fetch_response_details",
+            side_effect=ResponseDetailsIncomplete(
+                "page 3 failed", partial=RESPONSE_DETAILS
+            ),
+        ):
+            response = client.get("/datamanager/check-transform/details-fail-id")
+
+        assert response.status_code == 200
+        assert b"transformed data could not be fetched" in response.data
+        assert b"Reload to try again" in response.data
+        assert b"app-stat-box" not in response.data
+        # The partial rows carried on the exception are still rendered.
+        assert b"Area A" in response.data
+
+
+class TestComparisonUnavailableOverride:
+    """Continuing past an unusable comparison is an admin-only override."""
+
+    def _set_admin(self, client, is_admin):
+        with client.session_transaction() as sess:
+            sess["user"] = {"name": "Tester", "is_admin": is_admin}
+
+    def _incomplete_transform_page(self, client, request_id):
+        rsps.add(
+            rsps.GET,
+            f"{ASYNC_BASE}/{request_id}",
+            json={**COMPLETED_TRANSFORM_REQUEST, "id": request_id},
+            status=200,
+        )
+        with patch(
+            "application.blueprints.datamanager.controllers.transform.get_organisation_name",
+            return_value="Test Org",
+        ), patch(
+            "application.blueprints.datamanager.controllers.transform.get_dataset_name",
+            return_value="Conservation Area",
+        ), patch(
+            "application.blueprints.datamanager.controllers.transform.get_org_entity",
+            return_value=None,
+        ), patch(
+            "application.blueprints.datamanager.controllers.transform.fetch_response_details",
+            side_effect=ResponseDetailsIncomplete(
+                "page 3 failed", partial=RESPONSE_DETAILS
+            ),
+        ):
+            return client.get(f"/datamanager/check-transform/{request_id}")
+
+    @rsps.activate
+    def test_non_admin_cannot_continue(self, client):
+        self._set_admin(client, False)
+        response = self._incomplete_transform_page(client, "no-admin-id")
+
+        assert response.status_code == 200
+        assert b"not authorised to continue" in response.data
+        assert b"Continue to preview" in response.data
+        # The continue control is present but inert.
+        assert b"disabled aria-disabled" in response.data
+
+    @rsps.activate
+    def test_admin_can_continue(self, client):
+        self._set_admin(client, True)
+        response = self._incomplete_transform_page(client, "admin-id")
+
+        assert response.status_code == 200
+        # Banner still shows, but the real action buttons render.
+        assert b"transformed data could not be fetched" in response.data
+        assert b"not authorised to continue" not in response.data
+        assert b"Continue to preview" in response.data

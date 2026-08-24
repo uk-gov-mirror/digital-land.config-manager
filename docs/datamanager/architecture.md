@@ -35,6 +35,11 @@ application/blueprints/datamanager/
     └── csv_formats.py      # CSV format builders per dataset type
 ```
 
+Paged API fetches use `application/data_access/http.py`, which sits outside this
+blueprint because nothing about it is datamanager-specific. It provides the pooled
+`requests.Session` and `fetch_pages_concurrently(urls)`. See
+[Paged fetches and partial failure](#paged-fetches-and-partial-failure).
+
 ---
 
 ## Layers and responsibilities
@@ -97,9 +102,14 @@ Client for the async request API.
 |---|---|
 | `submit_request(params)` | POST to `/requests`, returns `request_id` |
 | `fetch_request(request_id)` | GET `/requests/<id>`, returns parsed dict |
-| `fetch_response_details(request_id, limit)` | Paginated GET of response details, returns aggregated list |
+| `fetch_response_details(request_id, limit)` | Paginated GET of response details, returns aggregated list. Memoized for **1 hour** |
 
-Raises `AsyncAPIError(message, status_code, detail)` on failure.
+Raises `AsyncAPIError(message, status_code, detail)` on failure, or
+`ResponseDetailsIncomplete` (a subclass, carrying `.partial`) when some pages fail.
+
+`fetch_response_details` reads the row total from the `X-Pagination-Total-Results`
+header on the first page, then fetches the remaining offsets in parallel. If that
+header is absent it falls back to sequential paging.
 
 #### `dataset.py`
 
@@ -169,8 +179,62 @@ Entity data from the planning data API (`PLANNING_BASE_URL`). Entity lists are m
 
 | Function | Description |
 |---|---|
-| `get_entity_count_for_organisation_and_dataset(organisation_entity, dataset)` | Total count of authoritative entities for an org entity number + dataset (single API call) |
-| `get_entities_for_organisation_and_dataset(organisation_entity, dataset)` | Full list of authoritative entities for an org entity number + dataset (handles pagination) |
+| `get_entity_count_for_organisation_and_dataset(organisation_entity, dataset)` | Total count of authoritative entities for an org entity number + dataset (single API call). Returns `None` if the call fails |
+| `get_entities_for_organisation_and_dataset(organisation_entity, dataset, total)` | Full list of authoritative entities for an org entity number + dataset |
+
+Raises `PlatformEntitiesIncomplete` when any page fails.
+
+The count is fetched first and passed in as `total`, so every page can be fetched in
+parallel. It returns `None` rather than `0` on failure precisely because it drives
+which offsets get requested — a failure that looked like a genuine zero would return
+no entities and report every entity in the resource as new. Without a `total`, the
+function falls back to walking `links.next` one page at a time.
+
+---
+
+### Paged fetches and partial failure
+
+The transform page reads two paginated sources, both capped server-side at 500 rows
+per page, and both fetched in parallel via `fetch_pages_concurrently`. Each feeds one
+side of the resource-vs-platform comparison, so a gap in either produces a page that
+looks authoritative and is wrong:
+
+| Source | Feeds | A missing page would cause |
+|---|---|---|
+| async `response-details` | transform table, issue log, resource side of the comparison | real platform entities shown as **"Platform only"** |
+| platform `entity.json` | platform side of the comparison | resource entities that already exist shown as **"New"** |
+
+**Services raise rather than return a partial list.** This is deliberate and load-bearing:
+both functions are wrapped in `cache.memoize`, which only stores return values. Returning
+a short list would cache the gap for the full timeout (1 hour / 5 minutes); raising leaves
+the cache empty so the next page load retries.
+
+**The controller then degrades the page rather than failing it:**
+
+| Failure | `all_resp_details` | Comparison | Banner |
+|---|---|---|---|
+| `ResponseDetailsIncomplete` | the exception's `.partial` rows | suppressed | "Some of the transformed data could not be fetched" + reload link |
+| `PlatformEntitiesIncomplete` | unaffected | suppressed | "The platform data could not be fetched" + reload link |
+| entity count unavailable (`None`) | unaffected | suppressed | same as `PlatformEntitiesIncomplete` |
+| count over `_PLATFORM_ENTITY_LIMIT` | unaffected | suppressed | existing "dataset too large" inset text |
+
+Suppressed means `comparison_unavailable` is passed to the template: the entity table and
+its summary stat boxes do not render, and an inset message explains why. The transform and
+issue log tables still render throughout.
+
+For `geography` datasets the map is built from the same two inputs, so it degrades with
+the comparison: `_build_geometry_features(..., compare=False)` returns only the resource's
+own geometry, with no `status` on any feature. The map JS already treats a statusless
+feature set as one neutral group (the check-results page relies on this), so the geometry
+stays visible without being miscategorised — no template or JS change needed.
+
+A `None` count is treated as a fetch failure rather than a zero. It determines which
+offsets get requested, so without it the too-large guard cannot be evaluated and paging
+would fall back to an unbounded serial walk inside the web request.
+
+**When adding a new paged fetch,** follow the same contract — raise on an incomplete
+result, let the controller decide how to degrade, and never return a partial list from a
+memoized function.
 
 ---
 
@@ -213,6 +277,7 @@ Format-specific CSV builders used in the add-data preview:
 
 Errors at any layer:
 - **Service errors** (`AsyncAPIError`, `GitHubAppError`, etc.) — catch in the controller, either recover or raise `ControllerError`
+- **Incomplete-fetch errors** (`ResponseDetailsIncomplete`, `PlatformEntitiesIncomplete`) — catch in the controller and degrade the page, never propagate; see [Paged fetches and partial failure](#paged-fetches-and-partial-failure)
 - **`ControllerError`** — caught by the router view function, renders `datamanager/error.html`
 - **Unexpected exceptions** — caught by `datamanager_bp.errorhandler(Exception)` → `handle_error`, renders `datamanager/error.html` with a 500
 

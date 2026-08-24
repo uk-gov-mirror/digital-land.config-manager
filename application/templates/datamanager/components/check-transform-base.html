@@ -15,7 +15,22 @@
     <h1 class="govuk-heading-xl" style="margin-bottom: 10px;">{% block heading %}{% endblock %}</h1>
     <hr style="border: none; border-top: 2px solid #b1b4b6; margin: 0 0 20px;">
 
-    {% if not platform_too_large and category_counts %}
+    {% if comparison_unavailable %}
+    <div class="govuk-warning-text">
+      <span class="govuk-warning-text__icon" aria-hidden="true">!</span>
+      <strong class="govuk-warning-text__text">
+        <span class="govuk-warning-text__assistive">Warning</span>
+        {% if details_incomplete %}
+          Some of the transformed data could not be fetched, so the tables below are incomplete and this resource has not been compared with the platform.
+        {% else %}
+          The platform data could not be fetched, so this resource has not been compared with the platform.
+        {% endif %}
+        <a class="govuk-link" href="{{ url_for(_transform_endpoint, request_id=request_id, errors=_flagged_errors_query) }}">Reload to try again</a>.
+      </strong>
+    </div>
+    {% endif %}
+
+    {% if not platform_too_large and not comparison_unavailable and category_counts %}
     {% set _categories = [
       {"id": "new",      "label": "New",               "hint": "in this resource only",         "bg": "#d4edda", "bar": "#00703c"},
       {"id": "changed",  "label": "Changed",           "hint": "differs from the platform",      "bg": "#ffd8b0", "bar": "#d4692a"},
@@ -97,6 +112,17 @@
         {% if platform_too_large %}
         <div class="govuk-inset-text">
           <p class="govuk-body">There are {{ existing_count | commanum }} existing entities on the platform for this dataset. Comparison between the resource and platform is disabled for datasets this large.</p>
+        </div>
+        {% elif comparison_unavailable %}
+        <div class="govuk-inset-text">
+          <p class="govuk-body">
+            {% if details_incomplete %}
+              Some of the transformed data could not be fetched, so this resource cannot be compared with the platform.
+            {% else %}
+              The platform data could not be fetched, so this resource cannot be compared with the platform.
+            {% endif %}
+            <a class="govuk-link" href="{{ url_for(_transform_endpoint, request_id=request_id, errors=_flagged_errors_query) }}">Reload to try again</a>.
+          </p>
         </div>
         {% elif entities_data %}
         <form method="get" action="{{ url_for(_transform_endpoint, request_id=request_id) }}" class="govuk-!-margin-bottom-4">
@@ -202,7 +228,7 @@
         {% else %}
         <p class="govuk-body">No entities to display.</p>
         {% endif %}
-        {% if not platform_too_large and entities_data and entities_data.rows %}
+        {% if not platform_too_large and not comparison_unavailable and entities_data and entities_data.rows %}
         <p class="govuk-body govuk-!-margin-top-4 govuk-!-margin-bottom-1">Showing entities {{ entity_page_start }} to {{ entity_page_end }}</p>
         {{ govukPagination(entity_pagination_params) }}
         {% endif %}
@@ -362,7 +388,15 @@
     </div>
     {% endif %}
 
+    {% if comparison_unavailable and not can_override %}
+    <div class="govuk-button-group govuk-!-margin-top-6">
+      <button class="govuk-button govuk-button--secondary" disabled aria-disabled="true">Continue to preview</button>
+      <button class="govuk-button govuk-button--warning" disabled aria-disabled="true" style="opacity:0.4; cursor:not-allowed;" title="You are not authorised to continue when the platform comparison is unavailable">Override</button>
+      <a href="{{ url_for('datamanager.dashboard_get') }}" class="govuk-link">Cancel</a>
+    </div>
+    {% else %}
     {% block action_buttons scoped %}{% endblock %}
+    {% endif %}
   </div>
 </div>
 

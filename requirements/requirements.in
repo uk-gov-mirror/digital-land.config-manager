@@ -6,6 +6,7 @@ gunicorn
 python-dotenv
 Flask-SQLAlchemy
 Flask-Migrate
+Flask-Caching
 psycopg2-binary
 requests
 Authlib
