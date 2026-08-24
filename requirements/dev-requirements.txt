@@ -6,12 +6,15 @@
 #
 black==26.1.0
     # via -r requirements/dev-requirements.in
+build==1.5.0
+    # via pip-tools
 cfgv==3.5.0
     # via pre-commit
 click==8.3.1
     # via
     #   -c requirements/requirements.txt
     #   black
+    #   pip-tools
 coverage[toml]==7.13.4
     # via pytest-cov
 distlib==0.4.0
@@ -35,7 +38,6 @@ mccabe==0.7.0
 mypy-extensions==1.1.0
     # via
     #   -c requirements/requirements.txt
-    #   -c requirements/requirements.txt
     #   black
 nodeenv==1.10.0
     # via pre-commit
@@ -43,9 +45,13 @@ packaging==26.0
     # via
     #   -c requirements/requirements.txt
     #   black
+    #   build
     #   pytest
+    #   wheel
 pathspec==1.0.4
     # via black
+pip-tools==7.6.1
+    # via -r requirements/dev-requirements.in
 platformdirs==4.9.2
     # via
     #   -c requirements/requirements.txt
@@ -53,7 +59,6 @@ platformdirs==4.9.2
     #   virtualenv
 pluggy==1.6.0
     # via
-    #   -c requirements/requirements.txt
     #   -c requirements/requirements.txt
     #   pytest
     #   pytest-cov
@@ -65,6 +70,10 @@ pyflakes==3.4.0
     # via flake8
 pygments==2.19.2
     # via pytest
+pyproject-hooks==1.2.0
+    # via
+    #   build
+    #   pip-tools
 pytest==9.0.2
     # via
     #   -r requirements/dev-requirements.in
@@ -81,13 +90,22 @@ tomli==2.4.0
     # via
     #   -c requirements/requirements.txt
     #   black
+    #   build
     #   coverage
+    #   pip-tools
     #   pytest
 typing-extensions==4.15.0
     # via
     #   -c requirements/requirements.txt
     #   black
     #   exceptiongroup
+    #   pip-tools
     #   virtualenv
 virtualenv==20.38.0
     # via pre-commit
+wheel==0.48.0
+    # via pip-tools
+
+# The following packages are considered to be unsafe in a requirements file:
+# pip
+# setuptools
