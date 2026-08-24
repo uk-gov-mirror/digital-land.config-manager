@@ -233,3 +233,45 @@ class TestCheckResultsIncompleteDetails:
         assert response.status_code == 200
         assert b"checked data could not be fetched" in response.data
         assert b"Reload to try again" in response.data
+
+    def _run(self, client, request_id, is_admin):
+        with client.session_transaction() as sess:
+            sess["user"] = {"name": "Tester", "is_admin": is_admin}
+        partial = [
+            {
+                "entry_number": 1,
+                "converted_row": {"ref": "R1"},
+                "transformed_row": [
+                    {"entity": 100, "field": "reference", "value": "R1"}
+                ],
+                "issue_logs": [],
+            }
+        ]
+        with patch(
+            "application.blueprints.datamanager.router.fetch_request",
+            return_value=COMPLETED_CHECK_RESULT,
+        ), patch(
+            "application.blueprints.datamanager.controllers.check.get_organisation_name",
+            return_value="Test Org",
+        ), patch(
+            "application.blueprints.datamanager.controllers.check.get_dataset_name",
+            return_value="Brownfield Land",
+        ), patch(
+            "application.blueprints.datamanager.controllers.check.fetch_response_details",
+            side_effect=ResponseDetailsIncomplete("page 2 failed", partial=partial),
+        ):
+            return client.get(f"/datamanager/check-results/{request_id}")
+
+    def test_non_admin_cannot_transform_on_incomplete_details(self, client):
+        # Incomplete rows block the same way blocking issues do.
+        response = self._run(client, "incomplete-no-admin", is_admin=False)
+
+        assert response.status_code == 200
+        assert b"not authorised to override" in response.data
+
+    def test_admin_gets_the_override_button(self, client):
+        response = self._run(client, "incomplete-admin", is_admin=True)
+
+        assert response.status_code == 200
+        assert b"not authorised to override" not in response.data
+        assert b"govuk-button--warning" in response.data

@@ -1241,3 +1241,57 @@ class TestCheckTransformFetchFailures:
         assert b"app-stat-box" not in response.data
         # The partial rows carried on the exception are still rendered.
         assert b"Area A" in response.data
+
+
+class TestComparisonUnavailableOverride:
+    """Continuing past an unusable comparison is an admin-only override."""
+
+    def _set_admin(self, client, is_admin):
+        with client.session_transaction() as sess:
+            sess["user"] = {"name": "Tester", "is_admin": is_admin}
+
+    def _incomplete_transform_page(self, client, request_id):
+        rsps.add(
+            rsps.GET,
+            f"{ASYNC_BASE}/{request_id}",
+            json={**COMPLETED_TRANSFORM_REQUEST, "id": request_id},
+            status=200,
+        )
+        with patch(
+            "application.blueprints.datamanager.controllers.transform.get_organisation_name",
+            return_value="Test Org",
+        ), patch(
+            "application.blueprints.datamanager.controllers.transform.get_dataset_name",
+            return_value="Conservation Area",
+        ), patch(
+            "application.blueprints.datamanager.controllers.transform.get_org_entity",
+            return_value=None,
+        ), patch(
+            "application.blueprints.datamanager.controllers.transform.fetch_response_details",
+            side_effect=ResponseDetailsIncomplete(
+                "page 3 failed", partial=RESPONSE_DETAILS
+            ),
+        ):
+            return client.get(f"/datamanager/check-transform/{request_id}")
+
+    @rsps.activate
+    def test_non_admin_cannot_continue(self, client):
+        self._set_admin(client, False)
+        response = self._incomplete_transform_page(client, "no-admin-id")
+
+        assert response.status_code == 200
+        assert b"not authorised to continue" in response.data
+        assert b"Continue to preview" in response.data
+        # The continue control is present but inert.
+        assert b"disabled aria-disabled" in response.data
+
+    @rsps.activate
+    def test_admin_can_continue(self, client):
+        self._set_admin(client, True)
+        response = self._incomplete_transform_page(client, "admin-id")
+
+        assert response.status_code == 200
+        # Banner still shows, but the real action buttons render.
+        assert b"transformed data could not be fetched" in response.data
+        assert b"not authorised to continue" not in response.data
+        assert b"Continue to preview" in response.data
