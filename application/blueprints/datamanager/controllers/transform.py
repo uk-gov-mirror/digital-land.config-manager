@@ -3,7 +3,7 @@ import logging
 import re
 
 import requests
-from flask import current_app, render_template, request as flask_request
+from flask import current_app, render_template, request as flask_request, session
 from shapely import wkt
 from shapely.geometry import mapping
 
@@ -964,6 +964,7 @@ def handle_check_transform(
     # resource entities as new; missing resource rows would show platform entities as
     # platform-only. Either way, suppress it rather than render something wrong.
     comparison_unavailable = platform_fetch_failed or details_incomplete
+    can_override = bool((session.get("user") or {}).get("is_admin"))
 
     response_payload = req.get("response") or {}
     response_data = response_payload.get("data") or {}
@@ -1058,6 +1059,7 @@ def handle_check_transform(
         entities_data=entities_data,
         platform_too_large=platform_too_large,
         comparison_unavailable=comparison_unavailable,
+        can_override=can_override,
         details_incomplete=details_incomplete,
         platform_fetch_failed=platform_fetch_failed,
         existing_count=existing_count,

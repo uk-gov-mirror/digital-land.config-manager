@@ -302,7 +302,7 @@ def handle_check_results(request_id, result):
         and entry.get("field") != "IGNORE"
         and entry.get("column") != "IGNORE"
     ]
-    allow_add_data = len(must_fix) == 0
+    allow_add_data = len(must_fix) == 0 and not details_incomplete
 
     can_override = False
     if not allow_add_data:

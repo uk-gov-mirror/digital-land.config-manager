@@ -388,7 +388,15 @@
     </div>
     {% endif %}
 
+    {% if comparison_unavailable and not can_override %}
+    <div class="govuk-button-group govuk-!-margin-top-6">
+      <button class="govuk-button govuk-button--secondary" disabled aria-disabled="true">Continue to preview</button>
+      <button class="govuk-button govuk-button--warning" disabled aria-disabled="true" style="opacity:0.4; cursor:not-allowed;" title="You are not authorised to continue when the platform comparison is unavailable">Override</button>
+      <a href="{{ url_for('datamanager.dashboard_get') }}" class="govuk-link">Cancel</a>
+    </div>
+    {% else %}
     {% block action_buttons scoped %}{% endblock %}
+    {% endif %}
   </div>
 </div>
 
