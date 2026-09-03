@@ -40,6 +40,8 @@ services:
         POSTGRES_PORT: 5432
         DATASETTE_BASE_URL: https://datasette.planning.data.gov.uk/digital-land
         PLANNING_URL: https://www.planning.data.gov.uk
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
     ports:
       - 5000:5000
       - 3000:3000
