@@ -184,7 +184,7 @@ moto==5.1.21
     # via digital-land
 mypy-extensions==1.1.0
     # via typing-inspect
-numpy==1.26.4
+numpy==2.5.2
     # via
     #   dask
     #   digital-land
